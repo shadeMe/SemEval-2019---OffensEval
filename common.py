@@ -93,13 +93,18 @@ class Dataset:
 
 # loads up pre-trained embeddings from disk
 class PretrainedEmbeddings:
-	def __init__(self):
+	def __init__(self, dim=100, len=100):
 		self.data = list()
-		self.dim = 0
-		self.np_arr = None
-		self.length = 0
+		self.dim = dim
+		self.length = len
+		self.np_arr = np.zeros([self.length, self.dim], dtype='float32')
 
 	def load(self, path, numberer, maxsize = -1):
+		# reset defaults
+		self.dim = 0
+		self.length = 0
+		self.np_arr = None
+
 		counter = 0
 		with open(path, encoding="utf-8") as f:
 			for line in f.read().split('\n'):

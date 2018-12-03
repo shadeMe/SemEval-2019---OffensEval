@@ -3,13 +3,14 @@ class DefaultConfig:
 	batch_size = 512
 	l2_beta = 0.001
 
-	char_embedding_size = 50
-	char_rnn_max_timesteps = 20
-	char_rnn_sizes = [10]
-	char_rnn_output_dropout = 0.9
-	char_rnn_state_dropout = 0.9
+	use_char_embeddings = False
+	char_embedding_size = 100
+	char_rnn_max_timesteps = 240
+	char_rnn_sizes = [140]
+	char_rnn_output_dropout = 0.6
+	char_rnn_state_dropout = 0.7
 
-	word_rnn_max_timesteps = 140
-	word_rnn_sizes = [100]
-	word_rnn_output_dropout = 0.9
-	word_rnn_state_dropout = 0.8
+	word_rnn_max_timesteps = 50
+	word_rnn_sizes = [25]
+	word_rnn_output_dropout = 0.95
+	word_rnn_state_dropout = 0.75

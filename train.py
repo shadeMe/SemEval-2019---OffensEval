@@ -26,83 +26,87 @@ def generate_instances(
 			batch_size,
 			max_label),
 		dtype=np.float32)
-	# sentence lengths
-	lengths = np.zeros(
+	# sentence representations with word IDs
+	sents_word = np.zeros(
+		shape=(
+			n_batches,
+			batch_size,
+			max_word_timesteps),
+		dtype=np.int32)
+	# sentence lengths as words
+	sents_word_lengths = np.zeros(
 		shape=(
 			n_batches,
 			batch_size),
 		dtype=np.int32)
-	# sentence representations with word IDs
-	sents = np.zeros(
+	# sentence representation with IDs of chars
+	sents_char = np.zeros(
 		shape=(
 			n_batches,
 			batch_size,
-			max_word_timesteps),
-		dtype=np.int32)
-	# word lengths in number of chars
-	word_lengths = np.zeros(
-		shape=(
-			n_batches,
-			batch_size,
-			max_word_timesteps),
-		dtype=np.int32)
-	# word representation with IDs of chars
-	words = np.zeros(
-		shape=(
-			n_batches,
-			batch_size,
-			max_word_timesteps,
 			max_char_timesteps),
+		dtype=np.int32)
+	# sentence lengths as characters
+	sents_char_lengths = np.zeros(
+		shape=(
+			n_batches,
+			batch_size),
 		dtype=np.int32)
 
 	for batch in range(n_batches):
 		for idx in range(batch_size):
 			(tokens, token_chars, label) = data[(batch * batch_size) + idx]
+			token_chars_flat = [char for word_token in token_chars for char in word_token]
+
+			# Label
 			labels[batch, idx, label] = 1
 
-			# Sequence
+			# Sequences
 			timesteps = min(max_word_timesteps, len(tokens))
+			timesteps_char = min(max_char_timesteps, len(token_chars_flat))
 
 			# Sequence length (time steps)
-			lengths[batch, idx] = timesteps
+			sents_word_lengths[batch, idx] = timesteps
+			sents_char_lengths[batch, idx] = timesteps_char
 
-			# Sentences
-			sents[batch, idx, :timesteps] = tokens[:timesteps]
+			# Sentences (tweets)
+			sents_word[batch, idx, :timesteps] = tokens[:timesteps]
+			sents_char[batch, idx, :timesteps_char] = token_chars_flat[:timesteps_char]
 
-			# Words
-			for word_id in range(timesteps):
-				char_timesteps = min(max_char_timesteps, len(token_chars[word_id]))
-				word_lengths[batch, idx, word_id] = char_timesteps
-				words[batch, idx, word_id, :char_timesteps] = token_chars[word_id][:char_timesteps]
 
-	return (sents, lengths, labels, word_lengths, words)
+	return (sents_word, sents_word_lengths, sents_char, sents_char_lengths, labels)
 
 
 def train_model(preproc, config, train_batches, validation_batches):
-	train_batches, train_lens, train_labels, train_word_lengths, train_words = train_batches
-	validation_batches, validation_lens, validation_labels, validation_word_lengths, validation_words = validation_batches
+	train_batches_words, train_batches_words_lengths, \
+	train_batches_chars, train_batches_chars_lengths, \
+	train_labels = train_batches
+
+	validation_batches_words, validation_batches_words_lengths, \
+	validation_batches_chars, validation_batches_chars_lengths, \
+	validation_labels = validation_batches
 
 	with tf.Session() as sess:
 		with tf.variable_scope("model", reuse=False):
 			train_model = Model(
 				preproc,
 				config,
-				train_batches,
-				train_lens,
+				train_batches_words,
+				train_batches_words_lengths,
+				train_batches_chars,
+				train_batches_chars_lengths,
 				train_labels,
-				train_word_lengths,
-				train_words,
 				phase=Phase.Train)
 
 		with tf.variable_scope("model", reuse=True):
 			validation_model = Model(
 				preproc,
 				config,
-				validation_batches,
-				validation_lens,
+				validation_batches_words,
+				validation_batches_words_lengths,
+				validation_batches_chars,
+				validation_batches_chars_lengths,
 				validation_labels,
-				validation_word_lengths,
-				validation_words,
 				phase=Phase.Validation)
 
 		sess.run(tf.global_variables_initializer())
@@ -122,15 +126,29 @@ def train_model(preproc, config, train_batches, validation_batches):
 			FN = 0.0
 
 			# train on all batches.
-			for batch in range(train_batches.shape[0]):
+			for batch in range(train_batches_words.shape[0]):
 				loss, _ = sess.run([train_model.loss, train_model.train_op], {
-					train_model.x: train_batches[batch], train_model.lens: train_lens[batch], train_model.word_lens: train_word_lengths[batch], train_model.words: train_words[batch], train_model.y: train_labels[batch]})
+										train_model.x: train_batches_words[batch],
+										train_model.lens: train_batches_words_lengths[batch],
+									    train_model.char_rep_lens: train_batches_chars_lengths[batch],
+									    train_model.char_rep: train_batches_chars[batch],
+									    train_model.y: train_labels[batch]
+									})
 				train_loss += loss
 
 			# validation on all batches.
-			for batch in range(validation_batches.shape[0]):
-				loss, acc, batch_tp, batch_tn, batch_fp, batch_fn = sess.run([validation_model.loss, validation_model.accuracy, validation_model.TP, validation_model.TN, validation_model.FP, validation_model.FN], {
-					validation_model.x: validation_batches[batch], validation_model.lens: validation_lens[batch], validation_model.word_lens: validation_word_lengths[batch], validation_model.words: validation_words[batch], validation_model.y: validation_labels[batch]})
+			for batch in range(validation_batches_words.shape[0]):
+				loss, acc, batch_tp, batch_tn, batch_fp, batch_fn = sess.run([
+								validation_model.loss, validation_model.accuracy,
+								validation_model.TP, validation_model.TN,
+								validation_model.FP, validation_model.FN], {
+									validation_model.x: validation_batches_words[batch],
+									validation_model.lens: validation_batches_words_lengths[batch],
+									validation_model.char_rep_lens: validation_batches_chars_lengths[batch],
+									validation_model.char_rep: validation_batches_chars[batch],
+									validation_model.y: validation_labels[batch]
+								})
+
 				validation_loss += loss
 				accuracy += acc
 				TP += batch_tp
@@ -138,9 +156,9 @@ def train_model(preproc, config, train_batches, validation_batches):
 				FP += batch_fp
 				FN += batch_fn
 
-			train_loss /= train_batches.shape[0]
-			validation_loss /= validation_batches.shape[0]
-			accuracy /= validation_batches.shape[0]
+			train_loss /= train_batches_words.shape[0]
+			validation_loss /= validation_batches_words.shape[0]
+			accuracy /= validation_batches_words.shape[0]
 			precision = TP / (TP + FP)
 			recall = TP / (TP + FN)
 			f1 = 2 * precision * recall / (precision + recall)
@@ -169,7 +187,7 @@ if __name__ == "__main__":
 	if len(sys.argv) != 5:
 		print_usage()
 
-		path_embed = "C:\\Users\\shadeMe\\Documents\\ML\\Embeddings\\glove.twitter.27B.25d.txt"
+		path_embed = "C:\\Users\\shadeMe\\Documents\\ML\\Embeddings\\glove.twitter.27B.100d.txt"
 
 		(train, test) = DatasetFile("Data\\offenseval-training-v1.tsv").partition(DEFAULT_TRAINING_DATA_PARTITION)
 		task_type = DEFAULT_TASK_TYPE

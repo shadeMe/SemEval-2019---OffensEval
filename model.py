@@ -72,7 +72,7 @@ class Model:
 
 		b = tf.get_variable(layer_prefix + "_b",
 					shape=[output_size],
-					initializer=tf.random_uniform_initializer(-1.0, 1.0))
+					initializer=tf.zeros_initializer())
 
 		return (tf.matmul(input, w) + b, w)
 
@@ -82,56 +82,36 @@ class Model:
 			self,
 			preproc,
 			config,
-			batch,
-			lens_batch,
-			label_batch,
-			word_lens,
-			words,
+			batch_words,
+			batch_words_lens,
+			batch_chars,
+			batch_chars_lens,
+			batch_labels,
 			phase=Phase.Predict):
-		batch_size = batch.shape[1]
-		input_size = batch.shape[2]
-		label_size = label_batch.shape[2]
-		words_size = words.shape[3]
+		label_size = batch_labels.shape[2]
 
 		# The integer-encoded words. input_size is the (maximum) number of
 		# time steps.
-		self._x = tf.placeholder(tf.int32, shape=[batch_size, input_size])
+		self._x = tf.placeholder(tf.int32, shape=[batch_words.shape[1], batch_words.shape[2]])
 
-		# This tensor provides the actual number of time steps for each
-		# instance.
-		self._lens = tf.placeholder(tf.int32, shape=[batch_size])
+		# This tensor provides the actual number of time steps for each instance.
+		self._lens = tf.placeholder(tf.int32, shape=[batch_words.shape[1]])
 
-		# This tensor provides the character IDs of words present
-		self._words = tf.placeholder(tf.int32, shape=[batch_size, input_size, words_size])
+		# This tensor provides the character IDs of the sentence
+		self._char_rep = tf.placeholder(tf.int32, shape=[batch_chars.shape[1], batch_chars.shape[2]])
 
-		# This tensor provides the actual number of char time steps for each word
-		self._word_lens = tf.placeholder(tf.int32, shape=[batch_size, input_size])
+		# This tensor provides the actual number of char time steps for each instance
+		self._char_rep_lens = tf.placeholder(tf.int32, shape=[batch_chars.shape[1]])
 
 		# The label distribution.
 		if phase != Phase.Predict:
-			self._y = tf.placeholder(tf.float32, shape=[batch_size, label_size])
+			self._y = tf.placeholder(tf.float32, shape=[batch_chars.shape[1], label_size])
 
 		# Word and character embeddings
-		char_embeddings = self.create_char_embedding_layer(preproc, config, phase)
-		char_embeddings = tf.nn.embedding_lookup(char_embeddings, self._words, None)
-#		char_embeddings_shape = tf.shape(char_embeddings)
-#		char_embeddings = tf.reshape(char_embeddings, shape=[-1, char_embeddings_shape[-2], char_embeddings_shape[-1]])
-#		self._word_lens = tf.reshape(self._word_lens, shape=[-1])
-
-		char_embeddings = self.create_bidi_gru_layer(char_embeddings,
-											config.char_rnn_sizes,
-											config.char_rnn_output_dropout,
-											config.char_rnn_state_dropout,
-										    self._word_lens,
-											phase,
-											"char_embed")
-#		char_embeddings = tf.reshape(char_embeddings, shape=[-1, char_embeddings_shape[1], 2 * config.char_rnn_sizes[0]])
-
 		word_embeddings = self.create_word_embedding_layer(preproc, config, phase)
 		word_embeddings = tf.nn.embedding_lookup(word_embeddings, self._x)
 
-		combined_embeddings = tf.concat([word_embeddings, char_embeddings], axis=2)
-		combined_embeddings = self.create_bidi_gru_layer(combined_embeddings,
+		word_embeddings = self.create_bidi_gru_layer(word_embeddings,
 											config.word_rnn_sizes,
 											config.word_rnn_output_dropout,
 											config.word_rnn_state_dropout,
@@ -139,16 +119,31 @@ class Model:
 											phase,
 											"word_embed")
 
+		combined_embeddings = word_embeddings
+
+		if config.use_char_embeddings:
+			char_embeddings = self.create_char_embedding_layer(preproc, config, phase)
+			char_embeddings = tf.nn.embedding_lookup(char_embeddings, self._char_rep)
+
+			char_embeddings = self.create_bidi_gru_layer(char_embeddings,
+												config.char_rnn_sizes,
+												config.char_rnn_output_dropout,
+												config.char_rnn_state_dropout,
+												self._char_rep_lens,
+												phase,
+												"char_embed")
+
+			combined_embeddings = tf.concat([word_embeddings, char_embeddings], axis=1)
+
+
 		final_logit_weights = tf.get_variable("final_layer_w",
 					shape=[combined_embeddings.shape[1], label_size],
-#					shape=[2 * config.word_rnn_sizes[0], label_size],
 					initializer=tf.random_uniform_initializer(-1.0, 1.0))
 
 		final_logit_bias = tf.get_variable("final_layer_b",
 					shape=[label_size],
 					initializer=tf.zeros_initializer())
 
-		combined_embeddings = tf.reshape(combined_embeddings, [-1, 2 * config.word_rnn_sizes[0]])
 		final_logits = tf.matmul(combined_embeddings, final_logit_weights) + final_logit_bias
 
 		if phase == Phase.Train or Phase.Validation:
@@ -159,7 +154,7 @@ class Model:
 		if phase == Phase.Train:
 			start_lr = 0.001
 			global_step = tf.Variable(0, trainable=False)
-			num_batches = preproc.get_training_set().get_size() / batch_size
+			num_batches = preproc.get_training_set().get_size() / batch_words.shape[1]
 			learning_rate = tf.train.exponential_decay(start_lr, global_step, num_batches, 0.9)
 			self._train_op = tf.train.RMSPropOptimizer(start_lr, decay=0.8).minimize(losses)
 			self._probs = probs = tf.nn.softmax(final_logits)
@@ -227,9 +222,9 @@ class Model:
 		return self._y
 
 	@property
-	def words(self):
-		return self._words
+	def char_rep(self):
+		return self._char_rep
 
 	@property
-	def word_lens(self):
-		return self._word_lens
+	def char_rep_lens(self):
+		return self._char_rep_lens
