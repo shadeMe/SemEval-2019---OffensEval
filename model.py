@@ -9,12 +9,13 @@ class Phase(Enum):
 	Validation = 1
 	Predict = 2
 
+
 class Model:
 	def create_char_embedding_layer(self, preproc, config, phase):
 		# trainable character level embeddings
 		char_embeddings = tf.get_variable(name="char_embeddings",
 								   initializer=tf.random_uniform_initializer(-1.0, 1.0),
-								   shape=(preproc.get_charvocab_size(), config.char_embedding_size),
+								   shape=[preproc.get_charvocab_size(), config.char_embedding_size],
 								   trainable=phase == Phase.Train)
 
 		return char_embeddings
@@ -45,6 +46,36 @@ class Model:
 
 		combine = tf.concat([pretrained, train_only, val_only], axis=0)
 		return combine
+
+	def create_bidi_gru_layer(self, input, output_sizes, output_dropout, state_dropout, seq_len, phase, name):
+		forward_cells = [rnn.GRUCell(size, name=name + "_gru-fw_" + str(idx)) for (idx, size) in enumerate(output_sizes)]
+		if phase == Phase.Train:
+			forward_cells = [rnn.DropoutWrapper(cell, output_keep_prob=output_dropout, state_keep_prob=state_dropout) for cell in forward_cells]
+
+		backward_cells = [rnn.GRUCell(size, name=name + "_gru-bw_" + str(idx)) for (idx, size) in enumerate(output_sizes)]
+		if phase == Phase.Train:
+			backward_cells = [rnn.DropoutWrapper(cell, output_keep_prob=output_dropout, state_keep_prob=state_dropout) for cell in backward_cells]
+
+		_, fstate, bstate = rnn.stack_bidirectional_dynamic_rnn(forward_cells,
+											backward_cells,
+											input,
+											dtype=tf.float32,
+											sequence_length=seq_len)
+
+		hidden_layer = tf.concat([fstate[-1], bstate[-1]], axis=1)
+		return hidden_layer
+
+	def calculate_logits(self, input, output_size, layer_prefix):
+		w = tf.get_variable(layer_prefix + "_w",
+					shape=[input.shape[1], output_size],
+					initializer=tf.random_uniform_initializer(-1.0, 1.0))
+
+		b = tf.get_variable(layer_prefix + "_b",
+					shape=[output_size],
+					initializer=tf.random_uniform_initializer(-1.0, 1.0))
+
+		return (tf.matmul(input, w) + b, w)
+
 
 
 	def __init__(
@@ -80,35 +111,49 @@ class Model:
 		if phase != Phase.Predict:
 			self._y = tf.placeholder(tf.float32, shape=[batch_size, label_size])
 
-		# Word and summed-up character embeddings
+		# Word and character embeddings
+		char_embeddings = self.create_char_embedding_layer(preproc, config, phase)
+		char_embeddings = tf.nn.embedding_lookup(char_embeddings, self._words, None)
+#		char_embeddings_shape = tf.shape(char_embeddings)
+#		char_embeddings = tf.reshape(char_embeddings, shape=[-1, char_embeddings_shape[-2], char_embeddings_shape[-1]])
+#		self._word_lens = tf.reshape(self._word_lens, shape=[-1])
+
+		char_embeddings = self.create_bidi_gru_layer(char_embeddings,
+											config.char_rnn_sizes,
+											config.char_rnn_output_dropout,
+											config.char_rnn_state_dropout,
+										    self._word_lens,
+											phase,
+											"char_embed")
+#		char_embeddings = tf.reshape(char_embeddings, shape=[-1, char_embeddings_shape[1], 2 * config.char_rnn_sizes[0]])
+
 		word_embeddings = self.create_word_embedding_layer(preproc, config, phase)
 		word_embeddings = tf.nn.embedding_lookup(word_embeddings, self._x)
 
-		#char_embeddings = self.create_char_embedding_layer(preproc, config, phase)
-		#char_embeddings = tf.nn.embedding_lookup(char_embeddings, self._words)
-		#char_embeddings = tf.reduce_sum(char_embeddings, 2)
-		#combined_embeddings = tf.concat([word_embeddings, char_embeddings], 2)
-		combined_embeddings = word_embeddings
+		combined_embeddings = tf.concat([word_embeddings, char_embeddings], axis=2)
+		combined_embeddings = self.create_bidi_gru_layer(combined_embeddings,
+											config.word_rnn_sizes,
+											config.word_rnn_output_dropout,
+											config.word_rnn_state_dropout,
+										    self._lens,
+											phase,
+											"word_embed")
 
-		forward_cell = rnn.GRUCell(config.forward_cell_units)
-		reg_forward_cell = rnn.DropoutWrapper(forward_cell, output_keep_prob=config.hidden_dropout)
-		backward_cell = rnn.GRUCell(config.backward_cell_units)
-		reg_backward_cell = rnn.DropoutWrapper(backward_cell, output_keep_prob=config.hidden_dropout)
-		_, lstm_out_split = tf.nn.bidirectional_dynamic_rnn(reg_forward_cell,
-															reg_backward_cell,
-															combined_embeddings,
-															sequence_length=self._lens,
-															dtype=tf.float32)
-		lstm_out = tf.concat(lstm_out_split, 1)
+		final_logit_weights = tf.get_variable("final_layer_w",
+					shape=[combined_embeddings.shape[1], label_size],
+#					shape=[2 * config.word_rnn_sizes[0], label_size],
+					initializer=tf.random_uniform_initializer(-1.0, 1.0))
 
-		w = tf.get_variable('weights', shape=[lstm_out.shape[1], label_size])
-		b = tf.get_variable('bias', shape=[1])
+		final_logit_bias = tf.get_variable("final_layer_b",
+					shape=[label_size],
+					initializer=tf.zeros_initializer())
 
-		logits = tf.matmul(lstm_out, w) + b
+		combined_embeddings = tf.reshape(combined_embeddings, [-1, 2 * config.word_rnn_sizes[0]])
+		final_logits = tf.matmul(combined_embeddings, final_logit_weights) + final_logit_bias
 
 		if phase == Phase.Train or Phase.Validation:
-			losses = tf.nn.softmax_cross_entropy_with_logits(labels=self._y, logits=logits)
-			losses = tf.reduce_mean(losses + config.l2_beta * tf.nn.l2_loss(w))
+			losses = tf.nn.softmax_cross_entropy_with_logits(labels=self._y, logits=final_logits)
+			losses = tf.reduce_mean(losses + config.l2_beta * tf.nn.l2_loss(final_logit_weights))
 			self._loss = loss = tf.reduce_sum(losses)
 
 		if phase == Phase.Train:
@@ -117,14 +162,14 @@ class Model:
 			num_batches = preproc.get_training_set().get_size() / batch_size
 			learning_rate = tf.train.exponential_decay(start_lr, global_step, num_batches, 0.9)
 			self._train_op = tf.train.RMSPropOptimizer(start_lr, decay=0.8).minimize(losses)
-			self._probs = probs = tf.nn.softmax(logits)
+			self._probs = probs = tf.nn.softmax(final_logits)
 
 		if phase == Phase.Validation:
 			# Labels for the gold data.
 			gold_labels = tf.argmax(self.y, axis=1)
 
 			# Predicted labels
-			pred_labels = tf.argmax(logits, axis=1)
+			pred_labels = tf.argmax(final_logits, axis=1)
 
 			correct = tf.equal(gold_labels, pred_labels)
 			correct = tf.cast(correct, tf.float32)

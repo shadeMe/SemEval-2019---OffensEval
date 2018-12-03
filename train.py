@@ -13,7 +13,7 @@ from common import *
 def generate_instances(
 		data,
 		max_label,
-		max_timesteps,
+		max_word_timesteps,
 		max_char_timesteps,
 		batch_size=128):
 	n_batches = data.get_size() // batch_size
@@ -37,32 +37,31 @@ def generate_instances(
 		shape=(
 			n_batches,
 			batch_size,
-			max_timesteps),
+			max_word_timesteps),
 		dtype=np.int32)
 	# word lengths in number of chars
 	word_lengths = np.zeros(
 		shape=(
 			n_batches,
 			batch_size,
-			max_timesteps),
+			max_word_timesteps),
 		dtype=np.int32)
 	# word representation with IDs of chars
 	words = np.zeros(
 		shape=(
 			n_batches,
 			batch_size,
-			max_timesteps,
+			max_word_timesteps,
 			max_char_timesteps),
 		dtype=np.int32)
 
 	for batch in range(n_batches):
 		for idx in range(batch_size):
-			(tokens, token_chars, sentiment) = data[(batch * batch_size) + idx]
-			label = sentiment
+			(tokens, token_chars, label) = data[(batch * batch_size) + idx]
 			labels[batch, idx, label] = 1
 
 			# Sequence
-			timesteps = min(max_timesteps, len(tokens))
+			timesteps = min(max_word_timesteps, len(tokens))
 
 			# Sequence length (time steps)
 			lengths[batch, idx] = timesteps
@@ -170,7 +169,7 @@ if __name__ == "__main__":
 	if len(sys.argv) != 5:
 		print_usage()
 
-		path_embed = "C:\\Users\\shadeMe\\Documents\\ML\\Embeddings\\glove.twitter.27B.100d.txt"
+		path_embed = "C:\\Users\\shadeMe\\Documents\\ML\\Embeddings\\glove.twitter.27B.25d.txt"
 
 		(train, test) = DatasetFile("Data\\offenseval-training-v1.tsv").partition(DEFAULT_TRAINING_DATA_PARTITION)
 		task_type = DEFAULT_TASK_TYPE
@@ -204,14 +203,14 @@ if __name__ == "__main__":
 	train_batches = generate_instances(
 		data_train,
 		preproc.get_max_labels(),
-		config.max_timesteps,
-		config.max_char_timesteps,
+		config.word_rnn_max_timesteps,
+		config.char_rnn_max_timesteps,
 		batch_size=config.batch_size)
 	validation_batches = generate_instances(
 		data_validation,
 		preproc.get_max_labels(),
-		config.max_timesteps,
-		config.max_char_timesteps,
+		config.word_rnn_max_timesteps,
+		config.char_rnn_max_timesteps,
 		batch_size=config.batch_size)
 
 	# Train the model
