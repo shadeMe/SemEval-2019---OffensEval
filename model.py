@@ -47,7 +47,8 @@ class Model:
 		combine = tf.concat([pretrained, train_only, val_only], axis=0)
 		return combine
 
-	def create_bidi_gru_layer(self, input, output_sizes, output_dropout, state_dropout, seq_len, phase, name):
+	def create_bidi_gru_layer(self, input, output_sizes, output_dropout, state_dropout, seq_len, phase, name,
+						  final_uni_rnn_size=-1, final_uni_rnn_output_dropout=1.0, final_uni_rnn_state_dropout=1.0):
 		forward_cells = [rnn.GRUCell(size, name=name + "_gru-fw_" + str(idx)) for (idx, size) in enumerate(output_sizes)]
 		if phase == Phase.Train:
 			forward_cells = [rnn.DropoutWrapper(cell, output_keep_prob=output_dropout, state_keep_prob=state_dropout) for cell in forward_cells]
@@ -63,9 +64,16 @@ class Model:
 											sequence_length=seq_len)
 
 		hidden_layer = tf.concat([fstate[-1], bstate[-1]], axis=1)
+		if final_uni_rnn_size != -1:
+			l2r_cell = rnn.GRUCell(final_uni_rnn_size, name=name + "_final_gru_l2r")
+			if phase == Phase.Train:
+				l2r_cell = rnn.DropoutWrapper(l2r_cell, output_keep_prob=final_uni_rnn_output_dropout, state_keep_prob=final_uni_rnn_state_dropout)
+
+			_, hidden_layer = tf.nn.dynamic_rnn(l2r_cell, hidden_layer, dtype=tf.float32)
+
 		return hidden_layer
 
-	def calculate_logits(self, input, output_size, layer_prefix):
+	def calculate_logits(self, input, output_size, layer_prefix, dropout=None, activation=None):
 		w = tf.get_variable(layer_prefix + "_w",
 					shape=[input.shape[1], output_size],
 					initializer=tf.random_uniform_initializer(-1.0, 1.0))
@@ -74,8 +82,15 @@ class Model:
 					shape=[output_size],
 					initializer=tf.zeros_initializer())
 
-		return (tf.matmul(input, w) + b, w)
+		if activation != None:
+			output = activation(tf.matmul(input, w) + b)
+		else:
+			output = tf.matmul(input, w) + b
 
+		if dropout != None:
+			output = tf.nn.dropout(output, dropout)
+
+		return (output, w)
 
 
 	def __init__(
@@ -87,6 +102,7 @@ class Model:
 			batch_chars,
 			batch_chars_lens,
 			batch_labels,
+			batch_docs,
 			phase=Phase.Predict):
 		label_size = batch_labels.shape[2]
 
@@ -107,19 +123,31 @@ class Model:
 		if phase != Phase.Predict:
 			self._y = tf.placeholder(tf.float32, shape=[batch_chars.shape[1], label_size])
 
+		# Document indices for tfidf/sentiment lookup
+		self._docs = tf.placeholder(tf.int32, shape=[batch_words.shape[1]])
+
 		# Word and character embeddings
-		word_embeddings = self.create_word_embedding_layer(preproc, config, phase)
-		word_embeddings = tf.nn.embedding_lookup(word_embeddings, self._x)
+		if not config.use_char_embeddings and not config.use_word_embeddings:
+			raise AssertionError("embeddings disabled!")
 
-		word_embeddings = self.create_bidi_gru_layer(word_embeddings,
-											config.word_rnn_sizes,
-											config.word_rnn_output_dropout,
-											config.word_rnn_state_dropout,
-										    self._lens,
-											phase,
-											"word_embed")
+		combined_embeddings = None
 
-		combined_embeddings = word_embeddings
+		if config.use_word_embeddings:
+			word_embeddings = self.create_word_embedding_layer(preproc, config, phase)
+			word_embeddings = tf.nn.embedding_lookup(word_embeddings, self._x)
+
+			word_embeddings = self.create_bidi_gru_layer(word_embeddings,
+												config.word_rnn_sizes,
+												config.word_rnn_output_dropout,
+												config.word_rnn_state_dropout,
+												self._lens,
+												phase,
+												"word_embed",
+												config.concat_uni_rnn_size,
+												config.concat_uni_rnn_output_dropout,
+												config.concat_uni_rnn_state_dropout)
+
+			combined_embeddings = word_embeddings
 
 		if config.use_char_embeddings:
 			char_embeddings = self.create_char_embedding_layer(preproc, config, phase)
@@ -131,18 +159,46 @@ class Model:
 												config.char_rnn_state_dropout,
 												self._char_rep_lens,
 												phase,
-												"char_embed")
+												"char_embed",
+												config.concat_uni_rnn_size,
+												config.concat_uni_rnn_output_dropout,
+												config.concat_uni_rnn_state_dropout)
 
-			combined_embeddings = tf.concat([word_embeddings, char_embeddings], axis=1)
+
+			if combined_embeddings != None:
+				combined_embeddings = tf.concat([combined_embeddings, char_embeddings], axis=1)
+			else:
+				combined_embeddings = char_embeddings
+
+		if config.use_tfidf_vectors:
+			tfidf_matrix = tf.get_variable(
+								name="tfidf_matrix",
+								shape=[preproc.get_tfidf().get_size(), preproc.get_tfidf().get_dim()],								initializer=tf.constant_initializer(np.asarray(preproc.get_tfidf().get_data()),
+								dtype=tf.float32),
+								trainable=False)
+			tfidf_vector = tf.gather(tfidf_matrix, self._docs)
+			combined_embeddings = tf.concat([combined_embeddings, tfidf_vector], axis=1)
 
 
-		final_logit_weights = tf.get_variable("final_layer_w",
-					shape=[combined_embeddings.shape[1], label_size],
-					initializer=tf.random_uniform_initializer(-1.0, 1.0))
+		final_hidden_layer, _ = self.calculate_logits(combined_embeddings,
+											config.final_hidden_layer_size,
+										    "final_hidden_layer",
+											config.final_hidden_layer_dropout,
+										    tf.nn.tanh)
 
-		final_logit_bias = tf.get_variable("final_layer_b",
-					shape=[label_size],
-					initializer=tf.zeros_initializer())
+		final_logits, final_logit_weights = self.calculate_logits(final_hidden_layer,
+															label_size,
+															"final_logits",
+															None,
+															tf.nn.tanh)
+
+		#final_logit_weights = tf.get_variable("final_layer_w",
+		#			shape=[combined_embeddings.shape[1], label_size],
+		#			initializer=tf.random_uniform_initializer(-1.0, 1.0))
+
+		#final_logit_bias = tf.get_variable("final_layer_b",
+		#			shape=[label_size],
+		#			initializer=tf.zeros_initializer())
 
 		final_logits = tf.matmul(combined_embeddings, final_logit_weights) + final_logit_bias
 
@@ -155,8 +211,7 @@ class Model:
 			start_lr = 0.001
 			global_step = tf.Variable(0, trainable=False)
 			num_batches = preproc.get_training_set().get_size() / batch_words.shape[1]
-			learning_rate = tf.train.exponential_decay(start_lr, global_step, num_batches, 0.9)
-			self._train_op = tf.train.RMSPropOptimizer(start_lr, decay=0.8).minimize(losses)
+			self._train_op = tf.train.AdamOptimizer(start_lr).minimize(losses)
 			self._probs = probs = tf.nn.softmax(final_logits)
 
 		if phase == Phase.Validation:
@@ -228,3 +283,7 @@ class Model:
 	@property
 	def char_rep_lens(self):
 		return self._char_rep_lens
+
+	@property
+	def docs(self):
+		return self._docs

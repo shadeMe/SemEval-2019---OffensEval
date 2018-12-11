@@ -3,10 +3,9 @@ import numpy as np
 import re
 from numberer import Numberer
 import random
-
-
-# when true, all negative labels are collapsed into a single (arbitrary) label
-COLLAPSE_NEGATIVE_CLASSES = True
+import hashedindex as hi
+from hashedindex import textparser
+from nltk.corpus import stopwords
 
 
 class TaskType(IntEnum):
@@ -27,8 +26,9 @@ class OffenceClasses(IntEnum):
 
 
 class DatasetFile:
-	def __init__(self, file_path=None):
+	def __init__(self, file_path=None, delimiter='\t'):
 		self.file_path = file_path
+		self.delimiter = delimiter
 		self.entries = list()		# list(cells)
 
 		if file_path == None:
@@ -39,7 +39,7 @@ class DatasetFile:
 			for (idx, line) in enumerate(f.read().split('\n')):
 				if idx == 0: continue
 
-				entries = line.strip().split('\t')
+				entries = line.strip().split(self.delimiter)
 				if len(entries) == 0: continue
 
 				self.entries.append(entries)
@@ -71,16 +71,20 @@ class DatasetFile:
 
 		return (first, second)
 
+	def merge(self, rhs):
+		self.entries += rhs.entries;
+		return self
+
 
 class Dataset:
 	def __init__(self):
-		self.data = list()	# tuple(list(word tokens), list(list(char tokens)), class), word/character tokens are Numberer indices
+		self.data = list()	# tuple(doc, list(word tokens), list(list(char tokens)), class), doc, word/character tokens are Numberer indices
 		self.vocab = set()	# set of all (word token) ids in this dataset
 
-	def put(self, text, text_chars, label):
+	def put(self, doc, text, text_chars, label):
 		for id in text:
 			self.vocab.add(id)
-		self.data.append((text, text_chars, label))
+		self.data.append((doc, text, text_chars, label))
 
 	def as_list(self):
 		return self.data
@@ -90,6 +94,7 @@ class Dataset:
 
 	def get_vocab_size(self):
 		return len(self.vocab)
+
 
 # loads up pre-trained embeddings from disk
 class PretrainedEmbeddings:
@@ -147,26 +152,72 @@ class PretrainedEmbeddings:
 		return self.length
 
 
+# calculates tf-idf vectors for documents
+class TfIdfVectorizer:
+	def __init__(self, dim=140):
+		self.dim = dim
+		self.inverted_index = hi.HashedIndex()
+		self.np_arr = None
+		self.length = 0
+
+	def add_document(self, doc_id, token_ids):
+		for token in token_ids:
+			self.inverted_index.add_term_occurrence(token, doc_id);
+
+	def vectorize(self, numberer_doc, doc2token_map):
+		assert self.np_arr == None
+		doc_vecs = [np.zeros(self.dim, dtype="float32")]
+
+		for i in range(1, numberer_doc.max_number()):	# index 0 is not used by the Numberer class
+			token_ids = doc2token_map[i]
+			if len(token_ids) > self.dim:
+				raise AssertionError("document " + str(i) + " has " + str(len(token_ids)) + " tokens, max allowed = " + str(self.dim))
+
+			tfidf_vec = np.zeros(self.dim, dtype="float32")
+			for (idx, token) in enumerate(token_ids):
+				tfidf_vec[idx] = self.inverted_index.get_tfidf(token, i, normalized=True)
+
+			doc_vecs.append(tfidf_vec)
+
+		assert len(doc_vecs) == numberer_doc.max_number()
+
+		self.np_arr = np.array(doc_vecs)
+		self.length = len(doc_vecs)
+
+	def get_dim(self):
+		return self.dim
+
+	def get_data(self):
+		return self.np_arr
+
+	def get_size(self):
+		return self.length
+
+
 # loads the input data and embeddings
 class Preprocessor:
-	def __init__(self, task_type):
+	def __init__(self, task_type, config):
 		self.task_type = task_type
+		self.config = config
 		self.embeddings = PretrainedEmbeddings()
 		self.numberer_word = Numberer()
 		self.numberer_char = Numberer()
 		self.numberer_label = Numberer()
-		self.vocab = set()				# corresponding to the entire corpus
+		self.numberer_doc = Numberer()
+		self.tfidf = TfIdfVectorizer(config.tweet_max_words)
+		self.vocab = set()						# corresponding to the entire corpus
+		self.docs = dict()						# doc_id -> list(token_ids)
 		self.train_set = None
 		self.val_set = None
-		self.vocab_sizes = None			# tuple(total vocab, embeddings only, training only, validation only)
+		self.vocab_sizes = None					# tuple(total vocab, embeddings only, training only, validation only)
 
 	def preprocess_tweet(self, text):
 		text = text.lower()
 		# strip hashs from hastags and placeholder tokens
 		to_strip = re.compile("(#|url|@user|@)")
 		stripped = re.sub(to_strip, "", text)
-		# naive word tokenization
-		tokens = list(filter(None, stripped.split(" ")))
+		tokens = list(map(lambda x: x[0], textparser.word_tokenize(stripped,
+															   stopwords.words('english') if self.config.remove_stopwords else [])))
 
 		return tokens
 
@@ -181,7 +232,7 @@ class Preprocessor:
 		elif self.task_type == TaskType.Subtask_B:
 			if label_subtask_b == "TIN":
 				final_label = OffenceClasses.Targeted
-			elif not COLLAPSE_NEGATIVE_CLASSES:
+			elif not self.config.collapse_negative_classes:
 				if label_subtask_a == "NOT":
 					final_label = OffenceClasses.Inoffensive
 				else:
@@ -193,9 +244,9 @@ class Preprocessor:
 				final_label = OffenceClasses.TargetIndividual
 			elif label_subtask_c == "GRP":
 				final_label = OffenceClasses.TargetGroup
-			elif label_subtask_c == "OTH":
+			elif label_subtask_c == "OTH" or label_subtask_c == "ORG":
 				final_label = OffenceClasses.TargetOther
-			elif not COLLAPSE_NEGATIVE_CLASSES:
+			elif not self.config.collapse_negative_classes:
 				if label_subtask_a == "NOT":
 					final_label = OffenceClasses.Inoffensive
 				else:
@@ -209,29 +260,40 @@ class Preprocessor:
 
 		return final_label
 
-	def get_max_labels(self):
-		return self.numberer_label.max_number()
-
 	def generate_dataset(self, dataset_file, numberer_word, numberer_char, numberer_label, maxsize = -1):
 		dataset = Dataset()
 		counter = 0
 
 		for entry in dataset_file.lines():
-			if len(entry) != 5:
+			if maxsize > 0 and counter > maxsize:
+				break
+
+			if len(entry) == 5:
+				# OffensEval Training Dataset - <id> <tweet> <labels>...
+				text = entry[1]
+				label_a = entry[2]
+				label_b = entry[3]
+				label_c = entry[4]
+			elif len(entry) == 4:
+				# OffensEval Trial Dataset - <tweet> <labels>...
+				text = entry[0]
+				label_a = entry[1]
+				label_b = entry[2]
+				label_c = entry[3]
+			elif len(entry) == 3:
+				# TRAC Training Dataset - <id> <tweet> <label>
+				# only for binary classification, must be preprocessed to use the OffsenEval tags
+				text = entry[1]
+				label_a = entry[2]
+				label_b = ""
+				label_c = ""
+			else:
 				print("invalid dataset instance " + str(counter + 1) + " in file " + dataset_file.path() \
 					+ "\tentry: " + str(entry))
 				continue
 
-			if maxsize > 0 and counter > maxsize:
-				break
-
-			#<id> <tweet> <labels>...
-			text = entry[1]
-			label_a = entry[2]
-			label_b = entry[3]
-			label_c = entry[4]
-
 			collapsed_label_id = numberer_label.number(self.get_offence_class(label_a, label_b, label_c))
+			document_id = self.numberer_doc.number(text);
 
 			# assign a unqiue id to all words and characters
 			tokens = self.preprocess_tweet(text)
@@ -246,7 +308,10 @@ class Preprocessor:
 			for id in word_ids:
 				self.vocab.add(id)
 
-			dataset.put(word_ids, char_ids, collapsed_label_id)
+			dataset.put(document_id, word_ids, char_ids, collapsed_label_id)
+			self.tfidf.add_document(document_id, word_ids)
+			self.docs[document_id] = word_ids
+
 			counter += 1
 
 		return dataset
@@ -255,21 +320,33 @@ class Preprocessor:
 		# we load the pretrained embeddings first to initialize our basic word vocabulary
 		# this way, the ids assigned to the words implicitly act as indices into the (pretrained) embedding matrix
 		# words that don't have a pretrained embedding collect at the end of the embedding matrix
-		# this lets us use random initializers for unknown words in the model
+		# this lets us use specific initializers for unknown words in the model
 		vocab_embeddings = 0
 		vocab_train_only = 0		# words in the training set that don't have an embedding
 		vocab_val_only = 0			# same as above but for the validation set
 
+		print("Loading embeddings...")
 		self.embeddings.load(path_embed, self.numberer_word)
 		vocab_embeddings = self.numberer_word.max_number()
+
+		print("Loading training data...")
 		self.train_set = self.generate_dataset(dataset_file_train, self.numberer_word, self.numberer_char, self.numberer_label, maxsize_train)
 		vocab_after_train = self.numberer_word.max_number()
 		vocab_train_only = vocab_after_train - vocab_embeddings
+
+		print("Loading validation data...")
 		self.val_set = self.generate_dataset(dataset_file_val, self.numberer_word, self.numberer_char, self.numberer_label, maxsize_val)
 		vocab_after_val = self.numberer_word.max_number()
 		vocab_val_only = vocab_after_val - vocab_after_train
 
 		self.vocab_sizes = (len(self.vocab), vocab_embeddings, vocab_train_only, vocab_val_only)
+
+		print("Calculating TF-IDF matrix...")
+		self.tfidf.vectorize(self.numberer_doc, self.docs)
+
+
+	def get_tfidf(self):
+		return self.tfidf
 
 	def get_embeddings(self):
 		return self.embeddings
@@ -288,3 +365,9 @@ class Preprocessor:
 
 	def get_charvocab_size(self):
 		return self.numberer_char.max_number()
+
+	def get_max_labels(self):
+		return self.numberer_label.max_number()
+
+	def get_max_docs(self):
+		return self.numberer_doc.max_number()

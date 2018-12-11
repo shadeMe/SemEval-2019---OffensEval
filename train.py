@@ -12,6 +12,7 @@ from common import *
 
 def generate_instances(
 		data,
+		max_doc,
 		max_label,
 		max_word_timesteps,
 		max_char_timesteps,
@@ -26,6 +27,12 @@ def generate_instances(
 			batch_size,
 			max_label),
 		dtype=np.float32)
+	# sentence/document vector
+	docs = np.zeros(
+		shape=(
+			n_batches,
+			batch_size),
+		dtype=np.int32)
 	# sentence representations with word IDs
 	sents_word = np.zeros(
 		shape=(
@@ -55,11 +62,14 @@ def generate_instances(
 
 	for batch in range(n_batches):
 		for idx in range(batch_size):
-			(tokens, token_chars, label) = data[(batch * batch_size) + idx]
+			(doc, tokens, token_chars, label) = data[(batch * batch_size) + idx]
 			token_chars_flat = [char for word_token in token_chars for char in word_token]
 
 			# Label
 			labels[batch, idx, label] = 1
+
+			# Sentences
+			docs[batch, idx] = doc
 
 			# Sequences
 			timesteps = min(max_word_timesteps, len(tokens))
@@ -74,17 +84,17 @@ def generate_instances(
 			sents_char[batch, idx, :timesteps_char] = token_chars_flat[:timesteps_char]
 
 
-	return (sents_word, sents_word_lengths, sents_char, sents_char_lengths, labels)
+	return (sents_word, sents_word_lengths, sents_char, sents_char_lengths, labels, docs)
 
 
 def train_model(preproc, config, train_batches, validation_batches):
 	train_batches_words, train_batches_words_lengths, \
 	train_batches_chars, train_batches_chars_lengths, \
-	train_labels = train_batches
+	train_labels, train_docs = train_batches
 
 	validation_batches_words, validation_batches_words_lengths, \
 	validation_batches_chars, validation_batches_chars_lengths, \
-	validation_labels = validation_batches
+	validation_labels, validation_docs = validation_batches
 
 	with tf.Session() as sess:
 		with tf.variable_scope("model", reuse=False):
@@ -96,6 +106,7 @@ def train_model(preproc, config, train_batches, validation_batches):
 				train_batches_chars,
 				train_batches_chars_lengths,
 				train_labels,
+				train_docs,
 				phase=Phase.Train)
 
 		with tf.variable_scope("model", reuse=True):
@@ -107,11 +118,14 @@ def train_model(preproc, config, train_batches, validation_batches):
 				validation_batches_chars,
 				validation_batches_chars_lengths,
 				validation_labels,
+				validation_docs,
 				phase=Phase.Validation)
 
 		sess.run(tf.global_variables_initializer())
 
 		prev_validation_loss = 0.0
+
+		config.print()
 		print("===============================================================================================================")
 		print("Epoch\tTrain Loss\tVal Loss\tDelta\t\tAccuracy\tPrecision\tRecall\t\tF1");
 		print("===============================================================================================================")
@@ -132,7 +146,8 @@ def train_model(preproc, config, train_batches, validation_batches):
 										train_model.lens: train_batches_words_lengths[batch],
 									    train_model.char_rep_lens: train_batches_chars_lengths[batch],
 									    train_model.char_rep: train_batches_chars[batch],
-									    train_model.y: train_labels[batch]
+									    train_model.y: train_labels[batch],
+									    train_model.docs: train_docs[batch]
 									})
 				train_loss += loss
 
@@ -146,7 +161,8 @@ def train_model(preproc, config, train_batches, validation_batches):
 									validation_model.lens: validation_batches_words_lengths[batch],
 									validation_model.char_rep_lens: validation_batches_chars_lengths[batch],
 									validation_model.char_rep: validation_batches_chars[batch],
-									validation_model.y: validation_labels[batch]
+									validation_model.y: validation_labels[batch],
+									validation_model.docs: validation_docs[batch]
 								})
 
 				validation_loss += loss
@@ -176,7 +192,7 @@ def train_model(preproc, config, train_batches, validation_batches):
 #	English: https://nlp.stanford.edu/projects/glove/
 
 DEFAULT_TRAINING_DATA_PARTITION = 80
-DEFAULT_TASK_TYPE = TaskType.Subtask_C
+DEFAULT_TASK_TYPE = TaskType.Subtask_A
 
 def print_usage():
 	print("Usage: python train.py WORD_EMBEDDINGS TRAIN_DATA TEST_DATA\n\twhere TASK = <A, B, C>\n\n")
@@ -189,7 +205,10 @@ if __name__ == "__main__":
 
 		path_embed = "C:\\Users\\shadeMe\\Documents\\ML\\Embeddings\\glove.twitter.27B.100d.txt"
 
-		(train, test) = DatasetFile("Data\\offenseval-training-v1.tsv").partition(DEFAULT_TRAINING_DATA_PARTITION)
+		(train, test) = DatasetFile("Data\\offenseval-training-v1.tsv")		\
+						.merge(DatasetFile("Data\\offenseval-trial.txt"))	\
+						.merge(DatasetFile("Data\\TRAC\\agr_en_train.csv", ','))	\
+						.partition(DEFAULT_TRAINING_DATA_PARTITION)
 		task_type = DEFAULT_TASK_TYPE
 	else:
 		task_type = sys.argv[1]
@@ -211,25 +230,30 @@ if __name__ == "__main__":
 		test = DatasetFile(path_test)
 
 	config = DefaultConfig()
-	preproc = Preprocessor(task_type)
+	preproc = Preprocessor(task_type, config)
 
 	preproc.load(path_embed, train, test)
 	data_train = preproc.get_training_set()
 	data_validation = preproc.get_validation_set()
 
 	# Generate batches
+	print("Generating batches...")
+
 	train_batches = generate_instances(
 		data_train,
+		preproc.get_max_docs(),
 		preproc.get_max_labels(),
 		config.word_rnn_max_timesteps,
 		config.char_rnn_max_timesteps,
 		batch_size=config.batch_size)
 	validation_batches = generate_instances(
 		data_validation,
+		preproc.get_max_docs(),
 		preproc.get_max_labels(),
 		config.word_rnn_max_timesteps,
 		config.char_rnn_max_timesteps,
 		batch_size=config.batch_size)
 
 	# Train the model
+	print("Begin training...\n\n\n\n")
 	train_model(preproc, config, train_batches, validation_batches)
