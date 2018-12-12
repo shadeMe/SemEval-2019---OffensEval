@@ -28,11 +28,14 @@ class Model:
 		embed_dim = preproc.get_embeddings().get_dim()
 		embed_size = preproc.get_embeddings().get_size()
 
-		pretrained = tf.get_variable(
-								name="embs_pretrained",
-								shape=[embed_size, embed_dim],
-								initializer=tf.constant_initializer(np.asarray(embedding_matrix), dtype=tf.float32),
-								trainable=phase == Phase.Train)
+		#pretrained = tf.get_variable(
+		#						name="embs_pretrained",
+		#						shape=[embed_size, embed_dim],
+		#						initializer=tf.constant_initializer(np.asarray(embedding_matrix),
+		#						dtype=tf.float32),
+		#						trainable=phase == Phase.Train)
+		self._embeddings = pretrained = tf.placeholder(tf.float32, [embed_size, embed_dim], name="embs_pretrained")
+		#pretrained = tf.Variable(self._embeddings, trainable=phase == Phase.Train)
 		train_only = tf.get_variable(
 								name="embs_train_only",
 								shape=[preproc.get_vocab_size_trainonly(), embed_dim],
@@ -180,25 +183,25 @@ class Model:
 			combined_embeddings = tf.concat([combined_embeddings, tfidf_vector], axis=1)
 
 
-		final_hidden_layer, _ = self.calculate_logits(combined_embeddings,
-											config.final_hidden_layer_size,
-										    "final_hidden_layer",
-											config.final_hidden_layer_dropout,
-										    tf.nn.tanh)
+		#final_hidden_layer, _ = self.calculate_logits(combined_embeddings,
+		#									config.final_hidden_layer_size,
+		#								    "final_hidden_layer",
+		#									config.final_hidden_layer_dropout,
+		#								    tf.nn.tanh)
 
-		final_logits, final_logit_weights = self.calculate_logits(final_hidden_layer,
-															label_size,
-															"final_logits",
-															None,
-															tf.nn.tanh)
+		#final_logits, final_logit_weights = self.calculate_logits(final_hidden_layer,
+		#													label_size,
+		#													"final_logits",
+		#													None,
+		#													tf.nn.tanh)
 
-		#final_logit_weights = tf.get_variable("final_layer_w",
-		#			shape=[combined_embeddings.shape[1], label_size],
-		#			initializer=tf.random_uniform_initializer(-1.0, 1.0))
+		final_logit_weights = tf.get_variable("final_layer_w",
+					shape=[combined_embeddings.shape[1], label_size],
+					initializer=tf.random_uniform_initializer(-1.0, 1.0))
 
-		#final_logit_bias = tf.get_variable("final_layer_b",
-		#			shape=[label_size],
-		#			initializer=tf.zeros_initializer())
+		final_logit_bias = tf.get_variable("final_layer_b",
+					shape=[label_size],
+					initializer=tf.zeros_initializer())
 
 		final_logits = tf.matmul(combined_embeddings, final_logit_weights) + final_logit_bias
 
@@ -287,3 +290,7 @@ class Model:
 	@property
 	def docs(self):
 		return self._docs
+
+	@property
+	def embeddings(self):
+		return self._embeddings

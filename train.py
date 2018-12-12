@@ -130,6 +130,7 @@ def train_model(preproc, config, train_batches, validation_batches):
 		print("Epoch\tTrain Loss\tVal Loss\tDelta\t\tAccuracy\tPrecision\tRecall\t\tF1");
 		print("===============================================================================================================")
 
+		embedding_matrix = np.asarray(preproc.get_embeddings().get_data())
 		for epoch in range(config.n_epochs):
 			train_loss = 0.0
 			validation_loss = 0.0
@@ -142,6 +143,7 @@ def train_model(preproc, config, train_batches, validation_batches):
 			# train on all batches.
 			for batch in range(train_batches_words.shape[0]):
 				loss, _ = sess.run([train_model.loss, train_model.train_op], {
+										train_model.embeddings: embedding_matrix,
 										train_model.x: train_batches_words[batch],
 										train_model.lens: train_batches_words_lengths[batch],
 									    train_model.char_rep_lens: train_batches_chars_lengths[batch],
@@ -157,6 +159,7 @@ def train_model(preproc, config, train_batches, validation_batches):
 								validation_model.loss, validation_model.accuracy,
 								validation_model.TP, validation_model.TN,
 								validation_model.FP, validation_model.FN], {
+									validation_model.embeddings: embedding_matrix,
 									validation_model.x: validation_batches_words[batch],
 									validation_model.lens: validation_batches_words_lengths[batch],
 									validation_model.char_rep_lens: validation_batches_chars_lengths[batch],
@@ -192,7 +195,7 @@ def train_model(preproc, config, train_batches, validation_batches):
 #	English: https://nlp.stanford.edu/projects/glove/
 
 DEFAULT_TRAINING_DATA_PARTITION = 80
-DEFAULT_TASK_TYPE = TaskType.Subtask_A
+DEFAULT_TASK_TYPE = TaskType.Subtask_C
 
 def print_usage():
 	print("Usage: python train.py WORD_EMBEDDINGS TRAIN_DATA TEST_DATA\n\twhere TASK = <A, B, C>\n\n")
@@ -203,11 +206,11 @@ if __name__ == "__main__":
 	if len(sys.argv) != 5:
 		print_usage()
 
-		path_embed = "C:\\Users\\shadeMe\\Documents\\ML\\Embeddings\\glove.twitter.27B.100d.txt"
+	#	path_embed = "C:\\Users\\shadeMe\\Documents\\ML\\Embeddings\\glove.twitter.27B.25d.txt"
+		path_embed = "C:\\Users\\shadeMe\\Documents\\ML\\Embeddings\\wiki-news-300d-1M-subword.vec"
 
 		(train, test) = DatasetFile("Data\\offenseval-training-v1.tsv")		\
 						.merge(DatasetFile("Data\\offenseval-trial.txt"))	\
-						.merge(DatasetFile("Data\\TRAC\\agr_en_train.csv", ','))	\
 						.partition(DEFAULT_TRAINING_DATA_PARTITION)
 		task_type = DEFAULT_TASK_TYPE
 	else:

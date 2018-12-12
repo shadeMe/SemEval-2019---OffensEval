@@ -5,16 +5,16 @@ class DefaultConfig:
 		self.collapse_negative_classes = True		# when true, all negative labels are collapsed into a single (arbitrary) label
 
 		self.n_epochs = 30
-		self.batch_size = 256
+		self.batch_size = 1024
 		self.l2_beta = 0.001
 		self.final_hidden_layer_size = 100
-		self.final_hidden_layer_dropout = 0.5
+		self.final_hidden_layer_dropout = 0.9
 
 		self.concat_uni_rnn_size = -1
 		self.concat_uni_rnn_output_dropout = 0.8
 		self.concat_uni_rnn_state_dropout = 0.8
 
-		self.use_tfidf_vectors = True
+		self.use_tfidf_vectors = False
 
 		self.use_char_embeddings = True
 		self.char_embedding_size = 50
@@ -24,10 +24,10 @@ class DefaultConfig:
 		self.char_rnn_state_dropout = 0.7
 
 		self.use_word_embeddings = True
-		self.word_rnn_max_timesteps = 25
-		self.word_rnn_sizes = [100]
-		self.word_rnn_output_dropout = 0.75
-		self.word_rnn_state_dropout = 0.5
+		self.word_rnn_max_timesteps = 50
+		self.word_rnn_sizes = [25]
+		self.word_rnn_output_dropout = 0.95
+		self.word_rnn_state_dropout = 0.75
 
 
 	def print(self):

@@ -24,7 +24,6 @@ class OffenceClasses(IntEnum):
 	TargetGroup = 5,
 	TargetOther = 6
 
-
 class DatasetFile:
 	def __init__(self, file_path=None, delimiter='\t'):
 		self.file_path = file_path
@@ -104,6 +103,14 @@ class PretrainedEmbeddings:
 		self.length = len
 		self.np_arr = np.zeros([self.length, self.dim], dtype='float32')
 
+	def read_lines(self, file):
+		while True:
+			line = file.readline()
+			if line != "":
+				yield line
+			else:
+				break
+
 	def load(self, path, numberer, maxsize = -1):
 		# reset defaults
 		self.dim = 0
@@ -112,23 +119,28 @@ class PretrainedEmbeddings:
 
 		counter = 0
 		with open(path, encoding="utf-8") as f:
-			for line in f.read().split('\n'):
+			lines = self.read_lines(f)
+			for line in lines:
 				if (len(line) < 2): continue
 				elif (maxsize > 0 and counter > maxsize): break
 
 				splits = line.split(" ")
+				if len(splits) < 3:
+					continue;
+
 				if (self.dim == 0):
 					self.dim = len(splits) - 1
 					# the first index of the embedding list is not used (as Numberer ids start from 1)
 					self.data.append(np.zeros((self.dim), dtype='float32'))
 				elif len(splits) != self.dim + 1:
-					print("embedding entry " + str(counter) + " has invalid splits (" + str(len(splits)) + ")" \
-						+ "\nline: " + line)
+					print("invalid splits (found " + str(len(splits)) + ", expected " + str(self.dim + 1) + ")\nline: " + line)
 					continue
 
 				word = splits[0]
 				id = numberer.number(word.lower())
-				assert id == len(self.data)
+				if id == len(self.data):
+					print("word '" + word.lower() + "' has multiple embeddings (case-sensitive?)")
+					continue
 
 				# using an intermediate list as we don't know the vocab size/row count beforehand
 				vals = np.asarray(splits[1:], dtype='float32')
@@ -171,7 +183,9 @@ class TfIdfVectorizer:
 		for i in range(1, numberer_doc.max_number()):	# index 0 is not used by the Numberer class
 			token_ids = doc2token_map[i]
 			if len(token_ids) > self.dim:
-				raise AssertionError("document " + str(i) + " has " + str(len(token_ids)) + " tokens, max allowed = " + str(self.dim))
+			#	print("document " + str(i) + " has " + str(len(token_ids)) + " tokens, max allowed = " + str(self.dim))
+				# truncate the rest
+				token_ids = token_ids[0:self.dim - 1]
 
 			tfidf_vec = np.zeros(self.dim, dtype="float32")
 			for (idx, token) in enumerate(token_ids):
@@ -221,7 +235,7 @@ class Preprocessor:
 
 		return tokens
 
-	def get_offence_class(self, label_subtask_a, label_subtask_b, label_subtask_c):
+	def get_offence_class(self, dataset_file, text, label_subtask_a, label_subtask_b, label_subtask_c):
 		final_label = None
 
 		if self.task_type == TaskType.Subtask_A:
@@ -254,9 +268,8 @@ class Preprocessor:
 			else:
 				final_label = OffenceClasses.Untargeted
 
-		if final_label == None:
-			raise AssertionError("unknown label for dataset instance " + str(counter + 1) + " in file " + dataset_file.path() + "\t" \
-				+ "labels: " + label_subtask_a + ", " + label_subtask_b + ", " + label_subtask_c)
+		#if final_label == None:
+		#	print("unknown label for dataset instance '" + text + "' in file " + dataset_file.path() + "\t" + "labels: " + label_subtask_a + ", " + label_subtask_b + ", " + label_subtask_c)
 
 		return final_label
 
@@ -283,16 +296,20 @@ class Preprocessor:
 			elif len(entry) == 3:
 				# TRAC Training Dataset - <id> <tweet> <label>
 				# only for binary classification, must be preprocessed to use the OffsenEval tags
+				# multi-line entries are skipped
 				text = entry[1]
 				label_a = entry[2]
 				label_b = ""
 				label_c = ""
 			else:
-				print("invalid dataset instance " + str(counter + 1) + " in file " + dataset_file.path() \
-					+ "\tentry: " + str(entry))
+		#		print("invalid dataset instance " + str(counter + 1) + " in file " + dataset_file.path() \
+		#			+ "\tentry: " + str(entry))
 				continue
 
-			collapsed_label_id = numberer_label.number(self.get_offence_class(label_a, label_b, label_c))
+			collapsed_label_id = numberer_label.number(self.get_offence_class(dataset_file, text, label_a, label_b, label_c))
+			if collapsed_label_id == None:
+				continue;
+
 			document_id = self.numberer_doc.number(text);
 
 			# assign a unqiue id to all words and characters
@@ -333,11 +350,13 @@ class Preprocessor:
 		self.train_set = self.generate_dataset(dataset_file_train, self.numberer_word, self.numberer_char, self.numberer_label, maxsize_train)
 		vocab_after_train = self.numberer_word.max_number()
 		vocab_train_only = vocab_after_train - vocab_embeddings
+		print("\tParsed " + str(self.train_set.get_size()) + " instances")
 
 		print("Loading validation data...")
 		self.val_set = self.generate_dataset(dataset_file_val, self.numberer_word, self.numberer_char, self.numberer_label, maxsize_val)
 		vocab_after_val = self.numberer_word.max_number()
 		vocab_val_only = vocab_after_val - vocab_after_train
+		print("\tParsed " + str(self.val_set.get_size()) + " instances")
 
 		self.vocab_sizes = (len(self.vocab), vocab_embeddings, vocab_train_only, vocab_val_only)
 
