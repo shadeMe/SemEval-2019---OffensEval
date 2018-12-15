@@ -1,9 +1,12 @@
+# Use hate eval data, multi linked model for the subtasks, attention, sklearn metrics to calc precision and recall
+
 from enum import Enum
 import os
 import sys
 
 import numpy as np
 import tensorflow as tf
+from sklearn.metrics import precision_recall_fscore_support, accuracy_score
 
 from config import DefaultConfig
 from model import Model, Phase
@@ -126,9 +129,9 @@ def train_model(preproc, config, train_batches, validation_batches):
 		prev_validation_loss = 0.0
 
 		config.print()
-		print("===============================================================================================================")
-		print("Epoch\tTrain Loss\tVal Loss\tDelta\t\tAccuracy\tPrecision\tRecall\t\tF1");
-		print("===============================================================================================================")
+		print("================================================================================================================================================")
+		print("Epoch\tTrain Loss\tVal Loss\tDelta\t\tAccuracy\\SKL\t\tPrecision\\SKL\t\tRecall\\SKL\tF1\\SKL")
+		print("================================================================================================================================================")
 
 		embedding_matrix = np.asarray(preproc.get_embeddings().get_data())
 		for epoch in range(config.n_epochs):
@@ -139,6 +142,8 @@ def train_model(preproc, config, train_batches, validation_batches):
 			TN = 0.0
 			FP = 0.0
 			FN = 0.0
+			gold_labels = tf.zeros([0])
+			pred_labels = tf.zeros([0])
 
 			# train on all batches.
 			for batch in range(train_batches_words.shape[0]):
@@ -155,8 +160,9 @@ def train_model(preproc, config, train_batches, validation_batches):
 
 			# validation on all batches.
 			for batch in range(validation_batches_words.shape[0]):
-				loss, acc, batch_tp, batch_tn, batch_fp, batch_fn = sess.run([
+				loss, acc, batch_gold_lbl, batch_pred_lbl, batch_tp, batch_tn, batch_fp, batch_fn = sess.run([
 								validation_model.loss, validation_model.accuracy,
+								validation_model.gold_labels, validation_model.pred_labels,
 								validation_model.TP, validation_model.TN,
 								validation_model.FP, validation_model.FN], {
 									validation_model.embeddings: embedding_matrix,
@@ -168,6 +174,9 @@ def train_model(preproc, config, train_batches, validation_batches):
 									validation_model.docs: validation_docs[batch]
 								})
 
+				gold_labels = tf.concat([gold_labels, batch_gold_lbl], axis=0)
+				pred_labels = tf.concat([pred_labels, batch_pred_lbl], axis=0)
+
 				validation_loss += loss
 				accuracy += acc
 				TP += batch_tp
@@ -177,14 +186,17 @@ def train_model(preproc, config, train_batches, validation_batches):
 
 			train_loss /= train_batches_words.shape[0]
 			validation_loss /= validation_batches_words.shape[0]
-			accuracy /= validation_batches_words.shape[0]
+			accuracy /= validation_batches_words.shape[0] * 0.01
 			precision = TP / (TP + FP)
 			recall = TP / (TP + FN)
 			f1 = 2 * precision * recall / (precision + recall)
 
+			skl_precision, skl_recall, skl_f1, _ = precision_recall_fscore_support(gold_labels.eval(),
+																	  pred_labels.eval(), labels=[0,1,2,3,4,5,6], average='micro')
+			skl_accuracy = accuracy_score(gold_labels.eval(), pred_labels.eval(), normalize=True) * 100
 
-			print("%d\t%.2f\t\t%.2f\t\t%.4f\t\t%.2f\t\t%.4f\t\t%.4f\t\t%.4f" %
-				(epoch, train_loss, validation_loss, prev_validation_loss - validation_loss, accuracy * 100, precision, recall, f1))
+			print("%d\t%.2f\t\t%.2f\t\t%.4f\t\t%.2f\\%.2f\t\t%.4f\\%.4f\t\t%.4f\\%.4f\t%.4f\\%.4f" %
+				(epoch, train_loss, validation_loss, prev_validation_loss - validation_loss, accuracy, skl_accuracy, precision, skl_precision, recall, skl_recall, f1, skl_f1))
 
 			prev_validation_loss = validation_loss
 
@@ -195,10 +207,11 @@ def train_model(preproc, config, train_batches, validation_batches):
 #	English: https://nlp.stanford.edu/projects/glove/
 
 DEFAULT_TRAINING_DATA_PARTITION = 80
-DEFAULT_TASK_TYPE = TaskType.Subtask_C
+DEFAULT_TASK_TYPE = TaskType.Subtask_A
 
 def print_usage():
 	print("Usage: python train.py WORD_EMBEDDINGS TRAIN_DATA TEST_DATA\n\twhere TASK = <A, B, C>\n\n")
+
 
 if __name__ == "__main__":
 	print("\n\n\n\n\n\n")
@@ -206,12 +219,13 @@ if __name__ == "__main__":
 	if len(sys.argv) != 5:
 		print_usage()
 
-	#	path_embed = "C:\\Users\\shadeMe\\Documents\\ML\\Embeddings\\glove.twitter.27B.25d.txt"
-		path_embed = "C:\\Users\\shadeMe\\Documents\\ML\\Embeddings\\wiki-news-300d-1M-subword.vec"
+		path_embed = "C:\\Users\\shadeMe\\Documents\\ML\\Embeddings\\glove.twitter.27B.100d.txt"
+	#	path_embed = "C:\\Users\\shadeMe\\Documents\\ML\\Embeddings\\wiki-news-300d-1M-subword.vec"
 
 		(train, test) = DatasetFile("Data\\offenseval-training-v1.tsv")		\
 						.merge(DatasetFile("Data\\offenseval-trial.txt"))	\
 						.partition(DEFAULT_TRAINING_DATA_PARTITION)
+	#					.merge(DatasetFile("Data\\HatEval\\offsense_eval_converted.txt", encoding='ansi').partition(50)[0])	\
 		task_type = DEFAULT_TASK_TYPE
 	else:
 		task_type = sys.argv[1]

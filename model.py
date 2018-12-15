@@ -35,7 +35,7 @@ class Model:
 		#						dtype=tf.float32),
 		#						trainable=phase == Phase.Train)
 		self._embeddings = pretrained = tf.placeholder(tf.float32, [embed_size, embed_dim], name="embs_pretrained")
-		#pretrained = tf.Variable(self._embeddings, trainable=phase == Phase.Train)
+	#	pretrained = tf.Variable(self._embeddings, trainable=phase == Phase.Train)
 		train_only = tf.get_variable(
 								name="embs_train_only",
 								shape=[preproc.get_vocab_size_trainonly(), embed_dim],
@@ -48,6 +48,7 @@ class Model:
 								trainable=False)
 
 		combine = tf.concat([pretrained, train_only, val_only], axis=0)
+
 		return combine
 
 	def create_bidi_gru_layer(self, input, output_sizes, output_dropout, state_dropout, seq_len, phase, name,
@@ -130,6 +131,7 @@ class Model:
 		self._docs = tf.placeholder(tf.int32, shape=[batch_words.shape[1]])
 
 		# Word and character embeddings
+		self._embeddings = tf.placeholder(tf.float32, [None, None])	# dummy placeholder
 		if not config.use_char_embeddings and not config.use_word_embeddings:
 			raise AssertionError("embeddings disabled!")
 
@@ -176,8 +178,8 @@ class Model:
 		if config.use_tfidf_vectors:
 			tfidf_matrix = tf.get_variable(
 								name="tfidf_matrix",
-								shape=[preproc.get_tfidf().get_size(), preproc.get_tfidf().get_dim()],								initializer=tf.constant_initializer(np.asarray(preproc.get_tfidf().get_data()),
-								dtype=tf.float32),
+								shape=[preproc.get_tfidf().get_size(), preproc.get_tfidf().get_dim()],
+								initializer=tf.constant_initializer(np.asarray(preproc.get_tfidf().get_data()), dtype=tf.float32),
 								trainable=False)
 			tfidf_vector = tf.gather(tfidf_matrix, self._docs)
 			combined_embeddings = tf.concat([combined_embeddings, tfidf_vector], axis=1)
@@ -208,32 +210,29 @@ class Model:
 		if phase == Phase.Train or Phase.Validation:
 			losses = tf.nn.softmax_cross_entropy_with_logits(labels=self._y, logits=final_logits)
 			losses = tf.reduce_mean(losses + config.l2_beta * tf.nn.l2_loss(final_logit_weights))
-			self._loss = loss = tf.reduce_sum(losses)
+			self._loss = tf.reduce_sum(losses)
 
 		if phase == Phase.Train:
-			start_lr = 0.001
-			global_step = tf.Variable(0, trainable=False)
-			num_batches = preproc.get_training_set().get_size() / batch_words.shape[1]
-			self._train_op = tf.train.AdamOptimizer(start_lr).minimize(losses)
-			self._probs = probs = tf.nn.softmax(final_logits)
+			self._train_op = tf.train.AdamOptimizer(0.001).minimize(losses)
+			self._probs = tf.nn.softmax(final_logits)
 
 		if phase == Phase.Validation:
 			# Labels for the gold data.
-			gold_labels = tf.argmax(self.y, axis=1)
+			self._gold_labels = tf.argmax(self.y, axis=1)
 
 			# Predicted labels
-			pred_labels = tf.argmax(final_logits, axis=1)
+			self._pred_labels = tf.argmax(final_logits, axis=1)
 
-			correct = tf.equal(gold_labels, pred_labels)
+			correct = tf.equal(self._gold_labels, self._pred_labels)
 			correct = tf.cast(correct, tf.float32)
 			self._accuracy = tf.reduce_mean(correct)
 
 			# Method for calculating precision, recall and F1 score
 			# from https://stackoverflow.com/questions/35365007/tensorflow-precision-recall-f1-score-and-confusion-matrix
-			self._TP = tf.count_nonzero(pred_labels*gold_labels, dtype=tf.float32)
-			self._TN = tf.count_nonzero((pred_labels-1)*(gold_labels-1), dtype=tf.float32)
-			self._FP = tf.count_nonzero(pred_labels*(gold_labels-1), dtype=tf.float32)
-			self._FN = tf.count_nonzero((pred_labels-1)*gold_labels, dtype=tf.float32)
+			self._TP = tf.count_nonzero(self._pred_labels * self._gold_labels, dtype=tf.float32)
+			self._TN = tf.count_nonzero((self._pred_labels - 1) * (self._gold_labels - 1), dtype=tf.float32)
+			self._FP = tf.count_nonzero(self._pred_labels * (self._gold_labels - 1), dtype=tf.float32)
+			self._FN = tf.count_nonzero((self._pred_labels - 1) * self._gold_labels, dtype=tf.float32)
 
 	@property
 	def accuracy(self):
@@ -294,3 +293,11 @@ class Model:
 	@property
 	def embeddings(self):
 		return self._embeddings
+
+	@property
+	def gold_labels(self):
+		return self._gold_labels
+
+	@property
+	def pred_labels(self):
+		return self._pred_labels

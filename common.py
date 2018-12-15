@@ -25,7 +25,7 @@ class OffenceClasses(IntEnum):
 	TargetOther = 6
 
 class DatasetFile:
-	def __init__(self, file_path=None, delimiter='\t'):
+	def __init__(self, file_path=None, delimiter='\t', encoding='utf-8'):
 		self.file_path = file_path
 		self.delimiter = delimiter
 		self.entries = list()		# list(cells)
@@ -34,7 +34,7 @@ class DatasetFile:
 			self.file_path = "partitioned data"
 			return
 
-		with open(file_path, encoding="utf-8") as f:
+		with open(file_path, encoding=encoding) as f:
 			for (idx, line) in enumerate(f.read().split('\n')):
 				if idx == 0: continue
 
@@ -166,7 +166,7 @@ class PretrainedEmbeddings:
 
 # calculates tf-idf vectors for documents
 class TfIdfVectorizer:
-	def __init__(self, dim=140):
+	def __init__(self, dim):
 		self.dim = dim
 		self.inverted_index = hi.HashedIndex()
 		self.np_arr = None
@@ -218,7 +218,7 @@ class Preprocessor:
 		self.numberer_char = Numberer()
 		self.numberer_label = Numberer()
 		self.numberer_doc = Numberer()
-		self.tfidf = TfIdfVectorizer(config.tweet_max_words)
+		self.tfidf = TfIdfVectorizer(config.tf_idf_vector_size)
 		self.vocab = set()						# corresponding to the entire corpus
 		self.docs = dict()						# doc_id -> list(token_ids)
 		self.train_set = None
@@ -227,9 +227,12 @@ class Preprocessor:
 
 	def preprocess_tweet(self, text):
 		text = text.lower()
-		# strip hashs from hastags and placeholder tokens
-		to_strip = re.compile("(#|url|@user|@)")
-		stripped = re.sub(to_strip, "", text)
+		if not self.config.remove_hash_tags_and_mentions:
+			stripped = re.sub("(#|url|@user|@)", "", text)
+		else:
+			stripped = re.sub(r'\burl\b', '', text)
+			stripped = re.sub(r'(\b|\s)([@#][\w_-]+)', '', stripped)
+
 		tokens = list(map(lambda x: x[0], textparser.word_tokenize(stripped,
 															   stopwords.words('english') if self.config.remove_stopwords else [])))
 
@@ -282,7 +285,7 @@ class Preprocessor:
 				break
 
 			if len(entry) == 5:
-				# OffensEval Training Dataset - <id> <tweet> <labels>...
+				# OffensEval/HatEval Training Dataset - <id> <tweet> <labels>...
 				text = entry[1]
 				label_a = entry[2]
 				label_b = entry[3]
