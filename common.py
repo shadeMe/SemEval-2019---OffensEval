@@ -95,6 +95,8 @@ class Dataset:
 		return len(self.vocab)
 
 
+
+
 # loads up pre-trained embeddings from disk
 class PretrainedEmbeddings:
 	def __init__(self, dim=100, len=100):
@@ -183,7 +185,6 @@ class TfIdfVectorizer:
 		for i in range(1, numberer_doc.max_number()):	# index 0 is not used by the Numberer class
 			token_ids = doc2token_map[i]
 			if len(token_ids) > self.dim:
-			#	print("document " + str(i) + " has " + str(len(token_ids)) + " tokens, max allowed = " + str(self.dim))
 				# truncate the rest
 				token_ids = token_ids[0:self.dim - 1]
 
@@ -192,6 +193,51 @@ class TfIdfVectorizer:
 				tfidf_vec[idx] = self.inverted_index.get_tfidf(token, i, normalized=True)
 
 			doc_vecs.append(tfidf_vec)
+
+		assert len(doc_vecs) == numberer_doc.max_number()
+
+		self.np_arr = np.array(doc_vecs)
+		self.length = len(doc_vecs)
+
+	def get_dim(self):
+		return self.dim
+
+	def get_data(self):
+		return self.np_arr
+
+	def get_size(self):
+		return self.length
+
+
+# calculates sentiment vectors for documents
+class VaderSentimentVectorizer:
+	def __init__(self, dim):
+		self.dim = dim
+		self.np_arr = None
+		self.length = 0
+		self.lexicon = dict()
+
+
+	def load_lexicon(self, dataset_lexicon):
+		for entry in dataset_lexicon.lines():
+			self.lexicon[entry[0]] = float(entry[2])
+
+	def vectorize(self, numberer_doc, numberer_word, doc2token_map):
+		assert self.np_arr == None
+		doc_vecs = [np.zeros(self.dim, dtype="float32")]
+
+		for i in range(1, numberer_doc.max_number()):
+			token_ids = doc2token_map[i]
+			if len(token_ids) > self.dim:
+				token_ids = token_ids[0:self.dim - 1]
+
+			sentiment_vec = np.zeros(self.dim, dtype="float32")
+			for (idx, token) in enumerate(token_ids):
+				polarity = self.lexicon.get(numberer_word.value(token))
+				if polarity != None:
+					sentiment_vec[idx] = polarity
+
+			doc_vecs.append(sentiment_vec)
 
 		assert len(doc_vecs) == numberer_doc.max_number()
 
@@ -218,7 +264,8 @@ class Preprocessor:
 		self.numberer_char = Numberer()
 		self.numberer_label = Numberer()
 		self.numberer_doc = Numberer()
-		self.tfidf = TfIdfVectorizer(config.tf_idf_vector_size)
+		self.tfidf = TfIdfVectorizer(config.doc_vector_size)
+		self.sentiment = VaderSentimentVectorizer(config.doc_vector_size)
 		self.vocab = set()						# corresponding to the entire corpus
 		self.docs = dict()						# doc_id -> list(token_ids)
 		self.train_set = None
@@ -276,6 +323,38 @@ class Preprocessor:
 
 		return final_label
 
+	def generate_char_ids(self, tokens, numberer_char):
+		char_ids = list()
+		for word in tokens:
+			word_chars = list()
+			for char in word:
+				word_chars.append(numberer_char.number(char))
+			char_ids.append(word_chars)
+
+		return char_ids
+
+	def generate_char_ngram_ids(self, tokens, numberer_char):
+		if self.config.char_ngram_size < 1:
+			raise AssertionError("character n-gram size must be greater than zero")
+
+		n = self.config.char_ngram_size
+		# both @ and # should be stripped from the token input in the preprocessing step
+		pad_begin = ("@", ) * (n - 1)
+		pad_end = "#"
+
+		sent_char_ngram_ids = []
+		for token in tokens:
+			padded_seq = list(pad_begin)
+			padded_seq.extend([char for char in token])
+			padded_seq.append(pad_end)
+			char_ngrams = zip(*[padded_seq[i:] for i in range(1 + len(pad_begin))])
+
+			char_ngram_ids = [numberer_char.number(char_ngram) for char_ngram in char_ngrams]
+			sent_char_ngram_ids.append(char_ngram_ids)
+
+		return sent_char_ngram_ids
+
+
 	def generate_dataset(self, dataset_file, numberer_word, numberer_char, numberer_label, maxsize = -1):
 		dataset = Dataset()
 		counter = 0
@@ -318,12 +397,11 @@ class Preprocessor:
 			# assign a unqiue id to all words and characters
 			tokens = self.preprocess_tweet(text)
 			word_ids = [numberer_word.number(word) for word in tokens]
-			char_ids = list()
-			for word in tokens:
-				word_chars = list()
-				for char in word:
-					word_chars.append(numberer_char.number(char))
-				char_ids.append(word_chars)
+
+			if self.config.use_char_ngrams:
+				char_ids = self.generate_char_ngram_ids(tokens, numberer_char)
+			else:
+				char_ids = self.generate_char_ids(tokens, numberer_char)
 
 			for id in word_ids:
 				self.vocab.add(id)
@@ -336,7 +414,7 @@ class Preprocessor:
 
 		return dataset
 
-	def load(self, path_embed, dataset_file_train, dataset_file_val, maxsize_train = -1, maxsize_val = -1):
+	def load(self, path_embed, path_sent_lexicon, dataset_file_train, dataset_file_val, maxsize_train = -1, maxsize_val = -1):
 		# we load the pretrained embeddings first to initialize our basic word vocabulary
 		# this way, the ids assigned to the words implicitly act as indices into the (pretrained) embedding matrix
 		# words that don't have a pretrained embedding collect at the end of the embedding matrix
@@ -348,6 +426,9 @@ class Preprocessor:
 		print("Loading embeddings...")
 		self.embeddings.load(path_embed, self.numberer_word)
 		vocab_embeddings = self.numberer_word.max_number()
+
+		print("Loading sentiment lexicon...")
+		self.sentiment.load_lexicon(DatasetFile(path_sent_lexicon))
 
 		print("Loading training data...")
 		self.train_set = self.generate_dataset(dataset_file_train, self.numberer_word, self.numberer_char, self.numberer_label, maxsize_train)
@@ -366,9 +447,15 @@ class Preprocessor:
 		print("Calculating TF-IDF matrix...")
 		self.tfidf.vectorize(self.numberer_doc, self.docs)
 
+		print("Calculating sentiment matrix...")
+		self.sentiment.vectorize(self.numberer_doc, self.numberer_word, self.docs)
+
 
 	def get_tfidf(self):
 		return self.tfidf
+
+	def get_sentiment(self):
+		return self.sentiment
 
 	def get_embeddings(self):
 		return self.embeddings

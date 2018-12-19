@@ -1,4 +1,4 @@
-# Use hate eval data, multi linked model for the subtasks, attention, sklearn metrics to calc precision and recall
+# Use hate eval data, multi linked model for the subtasks, attention, char n-gram embeddings
 
 from enum import Enum
 import os
@@ -34,7 +34,8 @@ def generate_instances(
 	docs = np.zeros(
 		shape=(
 			n_batches,
-			batch_size),
+			batch_size,
+			max_word_timesteps),
 		dtype=np.int32)
 	# sentence representations with word IDs
 	sents_word = np.zeros(
@@ -71,9 +72,6 @@ def generate_instances(
 			# Label
 			labels[batch, idx, label] = 1
 
-			# Sentences
-			docs[batch, idx] = doc
-
 			# Sequences
 			timesteps = min(max_word_timesteps, len(tokens))
 			timesteps_char = min(max_char_timesteps, len(token_chars_flat))
@@ -85,6 +83,9 @@ def generate_instances(
 			# Sentences (tweets)
 			sents_word[batch, idx, :timesteps] = tokens[:timesteps]
 			sents_char[batch, idx, :timesteps_char] = token_chars_flat[:timesteps_char]
+
+			# Sentence ids
+			docs[batch, idx, :timesteps] = doc
 
 
 	return (sents_word, sents_word_lengths, sents_char, sents_char_lengths, labels, docs)
@@ -129,19 +130,16 @@ def train_model(preproc, config, train_batches, validation_batches):
 		prev_validation_loss = 0.0
 
 		config.print()
-		print("================================================================================================================================================")
-		print("Epoch\tTrain Loss\tVal Loss\tDelta\t\tAccuracy\\SKL\t\tPrecision\\SKL\t\tRecall\\SKL\tF1\\SKL")
-		print("================================================================================================================================================")
+		print("==============================================================================================================")
+		print("Epoch\tTrain Loss\tVal Loss\tDelta\t\tAccuracy\tPrecision\tRecall\t\tF1")
+		print("==============================================================================================================")
 
 		embedding_matrix = np.asarray(preproc.get_embeddings().get_data())
+		val_loss_delta_buf = [0, 0, 0]
 		for epoch in range(config.n_epochs):
 			train_loss = 0.0
 			validation_loss = 0.0
 			accuracy = 0.0
-			TP = 0.0
-			TN = 0.0
-			FP = 0.0
-			FN = 0.0
 			gold_labels = tf.zeros([0])
 			pred_labels = tf.zeros([0])
 
@@ -160,11 +158,9 @@ def train_model(preproc, config, train_batches, validation_batches):
 
 			# validation on all batches.
 			for batch in range(validation_batches_words.shape[0]):
-				loss, acc, batch_gold_lbl, batch_pred_lbl, batch_tp, batch_tn, batch_fp, batch_fn = sess.run([
+				loss, acc, batch_gold_lbl, batch_pred_lbl = sess.run([
 								validation_model.loss, validation_model.accuracy,
-								validation_model.gold_labels, validation_model.pred_labels,
-								validation_model.TP, validation_model.TN,
-								validation_model.FP, validation_model.FN], {
+								validation_model.gold_labels, validation_model.pred_labels], {
 									validation_model.embeddings: embedding_matrix,
 									validation_model.x: validation_batches_words[batch],
 									validation_model.lens: validation_batches_words_lengths[batch],
@@ -179,42 +175,45 @@ def train_model(preproc, config, train_batches, validation_batches):
 
 				validation_loss += loss
 				accuracy += acc
-				TP += batch_tp
-				TN += batch_tn
-				FP += batch_fp
-				FN += batch_fn
 
 			train_loss /= train_batches_words.shape[0]
 			validation_loss /= validation_batches_words.shape[0]
-			accuracy /= validation_batches_words.shape[0] * 0.01
-			precision = TP / (TP + FP)
-			recall = TP / (TP + FN)
-			f1 = 2 * precision * recall / (precision + recall)
+			validation_loss_delta = prev_validation_loss - validation_loss
+		#	accuracy /= validation_batches_words.shape[0] * 0.01
 
 			skl_precision, skl_recall, skl_f1, _ = precision_recall_fscore_support(gold_labels.eval(),
-																	  pred_labels.eval(), labels=[0,1,2,3,4,5,6], average='micro')
+																	  pred_labels.eval(), average='macro')
 			skl_accuracy = accuracy_score(gold_labels.eval(), pred_labels.eval(), normalize=True) * 100
 
-			print("%d\t%.2f\t\t%.2f\t\t%.4f\t\t%.2f\\%.2f\t\t%.4f\\%.4f\t\t%.4f\\%.4f\t%.4f\\%.4f" %
-				(epoch, train_loss, validation_loss, prev_validation_loss - validation_loss, accuracy, skl_accuracy, precision, skl_precision, recall, skl_recall, f1, skl_f1))
+			print("%d\t%.2f\t\t%.2f\t\t%.4f\t\t%.2f\t\t%.4f\t\t%.4f\t\t%.4f" %
+				(epoch, train_loss, validation_loss, validation_loss_delta, skl_accuracy, skl_precision, skl_recall, skl_f1))
 
 			prev_validation_loss = validation_loss
+
+			# stop if the loss delta buffer is saturated with negative values (model's overfitting)
+			for i in range(len(val_loss_delta_buf) - 1, 0, -1):
+				val_loss_delta_buf[i] = val_loss_delta_buf[i - 1]
+			val_loss_delta_buf[0] = validation_loss_delta
+
+			if len(list(filter(lambda x : x >= 0, val_loss_delta_buf))) == 0:
+				print("\n\nOverfitting detected, stopping...")
+				break
+
 
 # Usage: python train.py TASK WORD_EMBEDDINGS TRAIN_DATA TEST_DATA
 #	where TASK = <A, B, C>
 
-# Pre-trained word embeddings used:
-#	English: https://nlp.stanford.edu/projects/glove/
-
 DEFAULT_TRAINING_DATA_PARTITION = 80
-DEFAULT_TASK_TYPE = TaskType.Subtask_A
+DEFAULT_TASK_TYPE = TaskType.Subtask_C
 
 def print_usage():
-	print("Usage: python train.py WORD_EMBEDDINGS TRAIN_DATA TEST_DATA\n\twhere TASK = <A, B, C>\n\n")
+	print("Usage: python train.py TASK WORD_EMBEDDINGS TRAIN_DATA TEST_DATA\n\twhere TASK = <A, B, C>\n\n")
 
 
 if __name__ == "__main__":
 	print("\n\n\n\n\n\n")
+
+	path_sent_lexicon = "Data\\vader_lexicon.txt"
 
 	if len(sys.argv) != 5:
 		print_usage()
@@ -249,13 +248,11 @@ if __name__ == "__main__":
 	config = DefaultConfig()
 	preproc = Preprocessor(task_type, config)
 
-	preproc.load(path_embed, train, test)
+	preproc.load(path_embed, path_sent_lexicon, train, test)
 	data_train = preproc.get_training_set()
 	data_validation = preproc.get_validation_set()
 
-	# Generate batches
 	print("Generating batches...")
-
 	train_batches = generate_instances(
 		data_train,
 		preproc.get_max_docs(),
@@ -271,6 +268,5 @@ if __name__ == "__main__":
 		config.char_rnn_max_timesteps,
 		batch_size=config.batch_size)
 
-	# Train the model
 	print("Begin training...\n\n\n\n")
 	train_model(preproc, config, train_batches, validation_batches)

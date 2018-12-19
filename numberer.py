@@ -18,7 +18,7 @@ class Numberer:
         return n
 
     def value(self, number):
-        return self.n2v[number]
+        return self.n2v[number - 1]
 
     def max_number(self):
         return len(self.n2v) + 1
