@@ -21,7 +21,11 @@ def generate_instances(
 		max_char_timesteps,
 		batch_size=128):
 	n_batches = data.get_size() // batch_size
+	if n_batches == 0:
+		n_batches = 1
+		batch_size = data.get_size()
 	data = data.as_list()
+
 
 	# We are discarding the last batch for now, for simplicity.
 	labels = np.zeros(
@@ -219,11 +223,14 @@ if __name__ == "__main__":
 		print_usage()
 
 		path_embed = "C:\\Users\\shadeMe\\Documents\\ML\\Embeddings\\glove.twitter.27B.100d.txt"
-	#	path_embed = "C:\\Users\\shadeMe\\Documents\\ML\\Embeddings\\wiki-news-300d-1M-subword.vec"
 
-		(train, test) = DatasetFile("Data\\offenseval-training-v1.tsv")		\
-						.merge(DatasetFile("Data\\offenseval-trial.txt"))	\
-						.partition(DEFAULT_TRAINING_DATA_PARTITION)
+		train = DatasetFile("Data\\offenseval-training-v1.tsv")
+		train.keep_first(25)
+		test = train
+
+	#	(train, test) = DatasetFile("Data\\offenseval-training-v1.tsv")		\
+	#					.merge(DatasetFile("Data\\offenseval-trial.txt"))	\
+	#					.partition(DEFAULT_TRAINING_DATA_PARTITION)
 	#					.merge(DatasetFile("Data\\HatEval\\offsense_eval_converted.txt", encoding='ansi').partition(50)[0])	\
 		task_type = DEFAULT_TASK_TYPE
 	else:

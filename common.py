@@ -74,6 +74,14 @@ class DatasetFile:
 		self.entries += rhs.entries;
 		return self
 
+	def keep_first(self, num_entries_to_keep):
+		assert num_entries_to_keep > 0
+
+		if num_entries_to_keep >= len(self.entries):
+			return
+
+		self.entries = self.entries[0:num_entries_to_keep]
+
 
 class Dataset:
 	def __init__(self):
