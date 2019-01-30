@@ -74,6 +74,16 @@ class DatasetFile:
 		self.entries += rhs.entries;
 		return self
 
+	def keep_first(self, num_entries_to_keep):
+		assert num_entries_to_keep > 0
+
+		if num_entries_to_keep >= len(self.entries):
+			return
+
+		self.entries = self.entries[0:num_entries_to_keep]
+
+
+
 
 class Dataset:
 	def __init__(self):
@@ -318,8 +328,8 @@ class Preprocessor:
 			else:
 				final_label = OffenceClasses.Untargeted
 
-		#if final_label == None:
-		#	print("unknown label for dataset instance '" + text + "' in file " + dataset_file.path() + "\t" + "labels: " + label_subtask_a + ", " + label_subtask_b + ", " + label_subtask_c)
+		if final_label == None:
+			print("unknown label for dataset instance '" + text + "' in file " + dataset_file.path() + "\t" + "labels: " + label_subtask_a + ", " + label_subtask_b + ", " + label_subtask_c)
 
 		return final_label
 
@@ -388,9 +398,10 @@ class Preprocessor:
 		#			+ "\tentry: " + str(entry))
 				continue
 
-			collapsed_label_id = numberer_label.number(self.get_offence_class(dataset_file, text, label_a, label_b, label_c))
+			collapsed_label_id = self.get_offence_class(dataset_file, text, label_a, label_b, label_c)
 			if collapsed_label_id == None:
 				continue;
+			collapsed_label_id = numberer_label.number(collapsed_label_id)
 
 			document_id = self.numberer_doc.number(text);
 

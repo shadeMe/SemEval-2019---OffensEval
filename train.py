@@ -21,6 +21,10 @@ def generate_instances(
 		max_char_timesteps,
 		batch_size=128):
 	n_batches = data.get_size() // batch_size
+	if n_batches == 0:
+		n_batches = 1
+		batch_size = data.get_size()
+
 	data = data.as_list()
 
 	# We are discarding the last batch for now, for simplicity.
@@ -135,17 +139,17 @@ def train_model(preproc, config, train_batches, validation_batches):
 		print("==============================================================================================================")
 
 		embedding_matrix = np.asarray(preproc.get_embeddings().get_data())
-		val_loss_delta_buf = [0, 0, 0]
+		val_loss_delta_buf = [0, 0, 0, 0]
 		for epoch in range(config.n_epochs):
 			train_loss = 0.0
 			validation_loss = 0.0
-			accuracy = 0.0
+			training_accuracy = 0.0
 			gold_labels = tf.zeros([0])
 			pred_labels = tf.zeros([0])
 
 			# train on all batches.
 			for batch in range(train_batches_words.shape[0]):
-				loss, _ = sess.run([train_model.loss, train_model.train_op], {
+				loss, batch_gold_lbl, batch_pred_lbl = sess.run([train_model.loss, train_model.train_gold_labels, train_model.train_pred_labels], {
 										train_model.embeddings: embedding_matrix,
 										train_model.x: train_batches_words[batch],
 										train_model.lens: train_batches_words_lengths[batch],
@@ -155,6 +159,17 @@ def train_model(preproc, config, train_batches, validation_batches):
 									    train_model.docs: train_docs[batch]
 									})
 				train_loss += loss
+
+				gold_labels = tf.concat([gold_labels, batch_gold_lbl], axis=0)
+				pred_labels = tf.concat([pred_labels, batch_pred_lbl], axis=0)
+
+			skl_train_precision, skl_train_recall, skl_train_f1, _ = precision_recall_fscore_support(gold_labels.eval(),
+																	  pred_labels.eval(), average='macro')
+			skl_train_accuracy = accuracy_score(gold_labels.eval(), pred_labels.eval(), normalize=True) * 100
+
+			# reset for the validation batch
+			gold_labels = tf.zeros([0])
+			pred_labels = tf.zeros([0])
 
 			# validation on all batches.
 			for batch in range(validation_batches_words.shape[0]):
@@ -174,12 +189,11 @@ def train_model(preproc, config, train_batches, validation_batches):
 				pred_labels = tf.concat([pred_labels, batch_pred_lbl], axis=0)
 
 				validation_loss += loss
-				accuracy += acc
 
 			train_loss /= train_batches_words.shape[0]
 			validation_loss /= validation_batches_words.shape[0]
 			validation_loss_delta = prev_validation_loss - validation_loss
-		#	accuracy /= validation_batches_words.shape[0] * 0.01
+			training_accuracy /= train_batches_words.shape[0] * 0.01
 
 			skl_precision, skl_recall, skl_f1, _ = precision_recall_fscore_support(gold_labels.eval(),
 																	  pred_labels.eval(), average='macro')
@@ -195,7 +209,7 @@ def train_model(preproc, config, train_batches, validation_batches):
 				val_loss_delta_buf[i] = val_loss_delta_buf[i - 1]
 			val_loss_delta_buf[0] = validation_loss_delta
 
-			if len(list(filter(lambda x : x >= 0, val_loss_delta_buf))) == 0:
+			if len(list(filter(lambda x : x >= 0, val_loss_delta_buf))) == 0 and config.stop_on_overfitting:
 				print("\n\nOverfitting detected, stopping...")
 				break
 
@@ -219,11 +233,13 @@ if __name__ == "__main__":
 		print_usage()
 
 		path_embed = "C:\\Users\\shadeMe\\Documents\\ML\\Embeddings\\glove.twitter.27B.100d.txt"
-	#	path_embed = "C:\\Users\\shadeMe\\Documents\\ML\\Embeddings\\wiki-news-300d-1M-subword.vec"
 
-		(train, test) = DatasetFile("Data\\offenseval-training-v1.tsv")		\
-						.merge(DatasetFile("Data\\offenseval-trial.txt"))	\
-						.partition(DEFAULT_TRAINING_DATA_PARTITION)
+		train = DatasetFile("Data\\offenseval-training-v1.tsv")
+		train.keep_first(25)
+		test = train
+	#	(train, test) = DatasetFile("Data\\offenseval-training-v1.tsv")		\
+	#					.partition(DEFAULT_TRAINING_DATA_PARTITION)
+	#					.merge(DatasetFile("Data\\offenseval-trial.txt"))	\
 	#					.merge(DatasetFile("Data\\HatEval\\offsense_eval_converted.txt", encoding='ansi').partition(50)[0])	\
 		task_type = DEFAULT_TASK_TYPE
 	else:

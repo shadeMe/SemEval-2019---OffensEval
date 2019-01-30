@@ -70,7 +70,7 @@ class Model:
 
 		return hidden_layer
 
-	def calculate_logits(self, input, output_size, layer_prefix, dropout=None, activation=None):
+	def calculate_logits(self, input, output_size, layer_prefix, phase, dropout=None, activation=None):
 		w = tf.get_variable(layer_prefix + "_w",
 					shape=[input.shape[1], output_size],
 					initializer=tf.contrib.layers.xavier_initializer())
@@ -84,7 +84,7 @@ class Model:
 		else:
 			output = tf.matmul(input, w) + b
 
-		if dropout != None:
+		if dropout != None and phase == Phase.Train:
 			output = tf.nn.dropout(output, dropout)
 
 		return (output, w)
@@ -178,18 +178,21 @@ class Model:
 			final_hidden_layer, _ = self.calculate_logits(combined_embeddings,
 												config.final_hidden_layer_size,
 												"final_hidden_layer",
+												phase,
 												config.final_hidden_layer_dropout,
 												tf.nn.tanh)
 
 			final_logits, final_logit_weights = self.calculate_logits(final_hidden_layer,
 																label_size,
 																"final_logits",
+																phase,
 																None,
 																tf.nn.tanh)
 		else:
 			final_logits, final_logit_weights = self.calculate_logits(combined_embeddings,
 																label_size,
-																"final_logits")
+																"final_logits",
+																phase)
 
 		if phase == Phase.Train or Phase.Validation:
 			losses = tf.nn.softmax_cross_entropy_with_logits(labels=self._y, logits=final_logits)
@@ -199,6 +202,13 @@ class Model:
 		if phase == Phase.Train:
 			self._train_op = tf.train.AdamOptimizer(0.005).minimize(losses)
 			self._probs = tf.nn.softmax(final_logits)
+
+			# Labels for the gold data.
+			self._train_gold_labels = tf.argmax(self.y, axis=1)
+
+			# Predicted labels
+			self._train_pred_labels = tf.argmax(self._probs, axis=1)
+
 
 		if phase == Phase.Validation:
 			# Labels for the gold data.
@@ -262,3 +272,11 @@ class Model:
 	@property
 	def pred_labels(self):
 		return self._pred_labels
+
+	@property
+	def train_gold_labels(self):
+		return self._train_gold_labels
+
+	@property
+	def train_pred_labels(self):
+		return self._train_pred_labels
