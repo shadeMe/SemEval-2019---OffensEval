@@ -4,13 +4,15 @@ class DefaultConfig:
 		self.remove_stopwords = True
 		self.collapse_negative_classes = True		# when true, all negative labels are collapsed into a single (arbitrary) label
 
-		self.n_epochs = 25
+		self.n_epochs = 200
 		self.batch_size = 512
-		self.l2_beta = 0.001
-		self.doc_vector_size = 35					# corresponds to the (max) number of words allowed in the tweet
+		self.doc_vector_size = 25					# corresponds to the (max) number of words allowed in the tweet
+		self.use_weighted_loss = True
+		self.use_l2_regularization = True
+		self.l2_beta = 0.01
 
-		self.word_rnn_max_timesteps = 100
-		self.word_rnn_sizes = [50]
+		self.word_rnn_max_timesteps = 50
+		self.word_rnn_sizes = [100, 100]
 		self.word_rnn_output_dropout = 0.75
 		self.word_rnn_state_dropout = 0.5
 
@@ -19,14 +21,14 @@ class DefaultConfig:
 		self.final_hidden_layer_dropout = 0.75
 
 		self.use_tfidf_vectors = False
-		self.use_sentiment_vectors = True
+		self.use_sentiment_vectors = False
 
 		self.use_char_embeddings = True
 		self.use_char_ngrams = True
 		self.char_ngram_size = 3
 		self.char_embedding_size = 50
 		self.char_rnn_max_timesteps = 50
-		self.char_rnn_sizes = [25, 10]
+		self.char_rnn_sizes = [50, 50]
 		self.char_rnn_output_dropout = 0.75
 		self.char_rnn_state_dropout = 0.5
 

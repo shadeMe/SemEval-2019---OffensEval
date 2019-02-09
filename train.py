@@ -1,5 +1,3 @@
-# Use hate eval data, multi linked model for the subtasks, attention, char n-gram embeddings
-
 from enum import Enum
 import os
 import sys
@@ -183,7 +181,6 @@ def train_model(preproc, config, train_batches, validation_batches):
 			train_loss /= train_batches_words.shape[0]
 			validation_loss /= validation_batches_words.shape[0]
 			validation_loss_delta = prev_validation_loss - validation_loss
-		#	accuracy /= validation_batches_words.shape[0] * 0.01
 
 			skl_precision, skl_recall, skl_f1, _ = precision_recall_fscore_support(gold_labels.eval(),
 																	  pred_labels.eval(), average='macro')
@@ -199,16 +196,16 @@ def train_model(preproc, config, train_batches, validation_batches):
 				val_loss_delta_buf[i] = val_loss_delta_buf[i - 1]
 			val_loss_delta_buf[0] = validation_loss_delta
 
-			if len(list(filter(lambda x : x >= 0, val_loss_delta_buf))) == 0:
-				print("\n\nOverfitting detected, stopping...")
-				break
+		#	if len(list(filter(lambda x : x >= 0, val_loss_delta_buf))) == 0:
+		#		print("\n\nOverfitting detected, stopping...")
+		#		break
 
 
 # Usage: python train.py TASK WORD_EMBEDDINGS TRAIN_DATA TEST_DATA
 #	where TASK = <A, B, C>
 
 DEFAULT_TRAINING_DATA_PARTITION = 80
-DEFAULT_TASK_TYPE = TaskType.Subtask_C
+DEFAULT_TASK_TYPE = TaskType.Subtask_A
 
 def print_usage():
 	print("Usage: python train.py TASK WORD_EMBEDDINGS TRAIN_DATA TEST_DATA\n\twhere TASK = <A, B, C>\n\n")
@@ -224,14 +221,10 @@ if __name__ == "__main__":
 
 		path_embed = "C:\\Users\\shadeMe\\Documents\\ML\\Embeddings\\glove.twitter.27B.100d.txt"
 
-		train = DatasetFile("Data\\offenseval-training-v1.tsv")
-		train.keep_first(25)
-		test = train
+#		train = test = DatasetFile("Data\\offenseval-training-v1.tsv").partition(25)[0]
 
-	#	(train, test) = DatasetFile("Data\\offenseval-training-v1.tsv")		\
-	#					.merge(DatasetFile("Data\\offenseval-trial.txt"))	\
-	#					.partition(DEFAULT_TRAINING_DATA_PARTITION)
-	#					.merge(DatasetFile("Data\\HatEval\\offsense_eval_converted.txt", encoding='ansi').partition(50)[0])	\
+		train, test = DatasetFile("Data\\offenseval-training-v1.tsv") \
+						.partition(DEFAULT_TRAINING_DATA_PARTITION)
 		task_type = DEFAULT_TASK_TYPE
 	else:
 		task_type = sys.argv[1]

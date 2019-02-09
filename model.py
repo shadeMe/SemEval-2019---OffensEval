@@ -51,16 +51,22 @@ class Model:
 
 		return combine
 
-	def create_bidi_gru_layer(self, input, output_sizes, output_dropout, state_dropout, seq_len, phase, name):
-		forward_cells = [rnn.GRUCell(size, name=name + "_gru-fw_" + str(idx)) for (idx, size) in enumerate(output_sizes)]
+	def create_rnn_layer(self, input, output_sizes, output_dropout, state_dropout, seq_len, phase, name):
+		forward_cells = [rnn.GRUCell(
+			size,
+		    name=name + "_rnn-fw_" + str(idx)) for (idx, size) in enumerate(output_sizes)]
+
 		if phase == Phase.Train:
 			forward_cells = [rnn.DropoutWrapper(cell, output_keep_prob=output_dropout, state_keep_prob=state_dropout) for cell in forward_cells]
 
-		backward_cells = [rnn.GRUCell(size, name=name + "_gru-bw_" + str(idx)) for (idx, size) in enumerate(output_sizes)]
+		backward_cells = [rnn.GRUCell(
+			size,
+		    name=name + "_rnn-bw_" + str(idx)) for (idx, size) in enumerate(output_sizes)]
+
 		if phase == Phase.Train:
 			backward_cells = [rnn.DropoutWrapper(cell, output_keep_prob=output_dropout, state_keep_prob=state_dropout) for cell in backward_cells]
 
-		_, fstate, bstate = rnn.stack_bidirectional_dynamic_rnn(forward_cells,
+		output, fstate, bstate = rnn.stack_bidirectional_dynamic_rnn(forward_cells,
 											backward_cells,
 											input,
 											dtype=tf.float32,
@@ -70,7 +76,7 @@ class Model:
 
 		return hidden_layer
 
-	def calculate_logits(self, input, output_size, layer_prefix, dropout=None, activation=None):
+	def calculate_logits(self, input, output_size, layer_prefix, phase, dropout=None, activation=None):
 		w = tf.get_variable(layer_prefix + "_w",
 					shape=[input.shape[1], output_size],
 					initializer=tf.contrib.layers.xavier_initializer())
@@ -84,10 +90,27 @@ class Model:
 		else:
 			output = tf.matmul(input, w) + b
 
-		if dropout != None:
+		if dropout != None and phase == Phase.Train:
 			output = tf.nn.dropout(output, dropout)
 
 		return (output, w)
+
+	def weighted_loss(self, logits, labels, num_classes):
+		with tf.name_scope('loss_1'):
+			logits = tf.reshape(logits, (-1, num_classes))
+			epsilon = tf.constant(value=1e-10)
+			logits = logits + epsilon
+
+			# consturct one-hot label array
+			label_flat = tf.reshape(labels, (-1, 1))
+			labels = tf.reshape(tf.one_hot(label_flat, depth=num_classes), (-1, num_classes))
+			softmax = tf.nn.softmax(logits)
+			cross_entropy = -tf.reduce_sum(tf.mul(labels * tf.log(softmax + epsilon), coefficients), reduction_indices=[1])
+			cross_entropy_mean = tf.reduce_mean(cross_entropy, name='cross_entropy')
+			tf.add_to_collection('losses', cross_entropy_mean)
+			loss = tf.add_n(tf.get_collection('losses'), name='total_loss')
+
+			return loss
 
 
 	def __init__(
@@ -148,7 +171,7 @@ class Model:
 			sent_vector = tf.nn.embedding_lookup(sent_matrix, self._docs)
 			word_embeddings = tf.concat([word_embeddings, sent_vector], axis=2)
 
-		word_embeddings = self.create_bidi_gru_layer(word_embeddings,
+		word_embeddings = self.create_rnn_layer(word_embeddings,
 											config.word_rnn_sizes,
 											config.word_rnn_output_dropout,
 											config.word_rnn_state_dropout,
@@ -162,7 +185,7 @@ class Model:
 			char_embeddings = self.create_char_embedding_layer(preproc, config, phase)
 			char_embeddings = tf.nn.embedding_lookup(char_embeddings, self._char_rep)
 
-			char_embeddings = self.create_bidi_gru_layer(char_embeddings,
+			char_embeddings = self.create_rnn_layer(char_embeddings,
 												config.char_rnn_sizes,
 												config.char_rnn_output_dropout,
 												config.char_rnn_state_dropout,
@@ -178,26 +201,37 @@ class Model:
 			final_hidden_layer, _ = self.calculate_logits(combined_embeddings,
 												config.final_hidden_layer_size,
 												"final_hidden_layer",
+												phase,
 												config.final_hidden_layer_dropout,
 												tf.nn.tanh)
 
 			final_logits, final_logit_weights = self.calculate_logits(final_hidden_layer,
 																label_size,
 																"final_logits",
+																phase,
 																None,
 																tf.nn.tanh)
 		else:
 			final_logits, final_logit_weights = self.calculate_logits(combined_embeddings,
 																label_size,
-																"final_logits")
+																"final_logits",
+																phase,
+																None,
+																tf.nn.tanh)
 
 		if phase == Phase.Train or Phase.Validation:
-			losses = tf.nn.softmax_cross_entropy_with_logits(labels=self._y, logits=final_logits)
-			losses = tf.reduce_mean(losses + config.l2_beta * tf.nn.l2_loss(final_logit_weights))
+			if config.use_weighted_loss:
+				losses = self.weighted_loss(final_logits, self._y, preproc.get_max_labels())
+			else:
+				losses = tf.nn.softmax_cross_entropy_with_logits(labels=self._y, logits=final_logits)
+
+			if config.use_l2_regularization:
+				losses = tf.reduce_mean(losses + config.l2_beta * tf.nn.l2_loss(final_logit_weights))
+
 			self._loss = tf.reduce_sum(losses)
 
 		if phase == Phase.Train:
-			self._train_op = tf.train.AdamOptimizer(0.005).minimize(losses)
+			self._train_op = tf.train.AdamOptimizer(0.01).minimize(losses)
 			self._probs = tf.nn.softmax(final_logits)
 
 		if phase == Phase.Validation:

@@ -107,7 +107,7 @@ class Dataset:
 
 # loads up pre-trained embeddings from disk
 class PretrainedEmbeddings:
-	def __init__(self, dim=100, len=100):
+	def __init__(self, dim=100, len=1):
 		self.data = list()
 		self.dim = dim
 		self.length = len
@@ -432,7 +432,7 @@ class Preprocessor:
 		vocab_val_only = 0			# same as above but for the validation set
 
 		print("Loading embeddings...")
-		self.embeddings.load(path_embed, self.numberer_word)
+	#	self.embeddings.load(path_embed, self.numberer_word)
 		vocab_embeddings = self.numberer_word.max_number()
 
 		print("Loading sentiment lexicon...")
