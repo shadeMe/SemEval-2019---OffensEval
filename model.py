@@ -52,15 +52,17 @@ class Model:
 		return combine
 
 	def create_rnn_layer(self, input, output_sizes, output_dropout, state_dropout, seq_len, phase, name):
-		forward_cells = [rnn.GRUCell(
+		forward_cells = [rnn.LSTMCell(
 			size,
+			True,
 		    name=name + "_rnn-fw_" + str(idx)) for (idx, size) in enumerate(output_sizes)]
 
 		if phase == Phase.Train:
 			forward_cells = [rnn.DropoutWrapper(cell, output_keep_prob=output_dropout, state_keep_prob=state_dropout) for cell in forward_cells]
 
-		backward_cells = [rnn.GRUCell(
+		backward_cells = [rnn.LSTMCell(
 			size,
+			True,
 		    name=name + "_rnn-bw_" + str(idx)) for (idx, size) in enumerate(output_sizes)]
 
 		if phase == Phase.Train:
@@ -72,7 +74,7 @@ class Model:
 											dtype=tf.float32,
 											sequence_length=seq_len)
 
-		hidden_layer = tf.concat([fstate[-1], bstate[-1]], axis=1)
+		hidden_layer = tf.concat([fstate[-1][-1], bstate[-1][-1]], axis=1)
 
 		return hidden_layer
 
@@ -178,7 +180,7 @@ class Model:
 								shape=[preproc.get_sentiment().get_size(), preproc.get_sentiment().get_dim()],
 								initializer=tf.constant_initializer(np.asarray(preproc.get_sentiment().get_data()),dtype=tf.float32),trainable=False)
 			sent_vector = tf.gather(sent_matrix, self._docs)
-			aux_embeddings = sent_vector if aux_embeddings != None else tf.concat([aux_embeddings, sent_vector], axis=1)
+			aux_embeddings = sent_vector if aux_embeddings == None else tf.concat([aux_embeddings, sent_vector], axis=1)
 
 
 		if aux_embeddings != None:

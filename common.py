@@ -110,6 +110,13 @@ class Dataset:
 			ratios[i] = self.label_counts[i] / self.get_size() if not complement else 1 - self.label_counts[i] / self.get_size()
 		return ratios
 
+	def print_distribution(self, numberer_labels):
+		for i in range(0, numberer_labels.max_number()):
+			samples = self.label_counts[i]
+			label = numberer_labels.value(i)
+			print("\t" + str(label) + ": " + str(samples) + " samples (" + str(samples / self.get_size() * 100.) + "%)")
+
+
 
 # loads up pre-trained embeddings from disk
 class PretrainedEmbeddings:
@@ -437,6 +444,7 @@ class Preprocessor:
 
 		print("Loading embeddings...")
 		self.embeddings.load(path_embed, self.numberer_word)
+		print("\tParsed " + str(self.embeddings.get_size()) + " words of dimension " + str(self.embeddings.get_dim()));
 		vocab_embeddings = self.numberer_word.max_number()
 
 		print("Loading sentiment lexicon...")
@@ -447,12 +455,14 @@ class Preprocessor:
 		vocab_after_train = self.numberer_word.max_number()
 		vocab_train_only = vocab_after_train - vocab_embeddings
 		print("\tParsed " + str(self.train_set.get_size()) + " instances")
+		self.train_set.print_distribution(self.numberer_label)
 
 		print("Loading validation data...")
 		self.val_set = self.generate_dataset(dataset_file_val, self.numberer_word, self.numberer_char, self.numberer_label, maxsize_val)
 		vocab_after_val = self.numberer_word.max_number()
 		vocab_val_only = vocab_after_val - vocab_after_train
 		print("\tParsed " + str(self.val_set.get_size()) + " instances")
+		self.val_set.print_distribution(self.numberer_label)
 
 		self.vocab_sizes = (len(self.vocab), vocab_embeddings, vocab_train_only, vocab_val_only)
 

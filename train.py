@@ -137,7 +137,7 @@ def train_model(preproc, config, train_batches, validation_batches):
 		print("==============================================================================================================")
 
 		embedding_matrix = np.asarray(preproc.get_embeddings().get_data())
-		val_loss_delta_buf = [0, 0, 0, 0]
+		val_loss_delta_buf = [0, 0, 0, 0, 0, 0]
 		for epoch in range(config.n_epochs):
 			train_loss = 0.0
 			validation_loss = 0.0
@@ -198,12 +198,20 @@ def train_model(preproc, config, train_batches, validation_batches):
 					print("\n\nOverfitting detected, stopping...")
 					break
 
+				# also check the training and validation losses
+				if train_loss - validation_loss > 0.07:
+					print("\n\nUnderfitting detected, stopping...")
+					break
+				elif train_loss - validation_loss < -0.1:
+					print("\n\nOverfitting detected, stopping...")
+					break
+
 
 # Usage: python train.py TASK WORD_EMBEDDINGS TRAIN_DATA TEST_DATA
 #	where TASK = <A, B, C>
 
 DEFAULT_TRAINING_DATA_PARTITION = 80
-DEFAULT_TASK_TYPE = TaskType.Subtask_A
+DEFAULT_TASK_TYPE = TaskType.Subtask_C
 
 def print_usage():
 	print("Usage: python train.py TASK WORD_EMBEDDINGS TRAIN_DATA TEST_DATA\n\twhere TASK = <A, B, C>\n\n")
@@ -218,8 +226,11 @@ if __name__ == "__main__":
 		print_usage()
 
 		path_embed = "C:\\Users\\shadeMe\\Documents\\ML\\Embeddings\\glove.twitter.27B.100d.txt"
-		train, test = DatasetFile("Data\\offenseval-training-v1.tsv") \
-						.partition(DEFAULT_TRAINING_DATA_PARTITION)
+		hateval_data = DatasetFile("Data\\HatEval\\offsense_eval_converted.txt", encoding='ANSI')
+		trial_data = DatasetFile("Data\\offenseval-trial.txt")
+		training_data = DatasetFile("Data\\offenseval-training-v1.tsv")
+
+		train, test = training_data.merge(trial_data).partition(DEFAULT_TRAINING_DATA_PARTITION)
 		task_type = DEFAULT_TASK_TYPE
 	else:
 		task_type = sys.argv[1]
@@ -263,5 +274,5 @@ if __name__ == "__main__":
 		config.char_rnn_max_timesteps,
 		batch_size=config.batch_size)
 
-	print("Begin training...\n\n\n\n")
+	print("Begin training...\n\n\n")
 	train_model(preproc, config, train_batches, validation_batches)
