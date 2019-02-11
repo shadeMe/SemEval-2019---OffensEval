@@ -66,7 +66,7 @@ class Model:
 		if phase == Phase.Train:
 			backward_cells = [rnn.DropoutWrapper(cell, output_keep_prob=output_dropout, state_keep_prob=state_dropout) for cell in backward_cells]
 
-		output, fstate, bstate = rnn.stack_bidirectional_dynamic_rnn(forward_cells,
+		_, fstate, bstate = rnn.stack_bidirectional_dynamic_rnn(forward_cells,
 											backward_cells,
 											input,
 											dtype=tf.float32,
@@ -76,7 +76,7 @@ class Model:
 
 		return hidden_layer
 
-	def calculate_logits(self, input, output_size, layer_prefix, phase, dropout=None, activation=None):
+	def add_hidden_layer(self, input, output_size, layer_prefix, phase, dropout=None, activation=None):
 		w = tf.get_variable(layer_prefix + "_w",
 					shape=[input.shape[1], output_size],
 					initializer=tf.contrib.layers.xavier_initializer())
@@ -94,23 +94,6 @@ class Model:
 			output = tf.nn.dropout(output, dropout)
 
 		return (output, w)
-
-	def weighted_loss(self, logits, labels, num_classes):
-		with tf.name_scope('loss_1'):
-			logits = tf.reshape(logits, (-1, num_classes))
-			epsilon = tf.constant(value=1e-10)
-			logits = logits + epsilon
-
-			# consturct one-hot label array
-			label_flat = tf.reshape(labels, (-1, 1))
-			labels = tf.reshape(tf.one_hot(label_flat, depth=num_classes), (-1, num_classes))
-			softmax = tf.nn.softmax(logits)
-			cross_entropy = -tf.reduce_sum(tf.mul(labels * tf.log(softmax + epsilon), coefficients), reduction_indices=[1])
-			cross_entropy_mean = tf.reduce_mean(cross_entropy, name='cross_entropy')
-			tf.add_to_collection('losses', cross_entropy_mean)
-			loss = tf.add_n(tf.get_collection('losses'), name='total_loss')
-
-			return loss
 
 
 	def __init__(
@@ -144,7 +127,7 @@ class Model:
 			self._y = tf.placeholder(tf.float32, shape=[batch_chars.shape[1], label_size])
 
 		# Document indices for tfidf/sentiment lookup
-		self._docs = tf.placeholder(tf.int32, shape=[batch_words.shape[1], batch_words.shape[2]])
+		self._docs = tf.placeholder(tf.int32, shape=[batch_docs.shape[1]])
 
 		# Word and character embeddings
 		self._embeddings = tf.placeholder(tf.float32, [None, None])	# dummy placeholder
@@ -153,23 +136,6 @@ class Model:
 
 		word_embeddings = self.create_word_embedding_layer(preproc, config, phase)
 		word_embeddings = tf.nn.embedding_lookup(word_embeddings, self._x)
-
-		# concat auxiliary vectors to the embedding
-		if config.use_tfidf_vectors:
-			tfidf_matrix = tf.get_variable(
-								name="tfidf_matrix",
-								shape=[preproc.get_tfidf().get_size(), preproc.get_tfidf().get_dim()],
-								initializer=tf.constant_initializer(np.asarray(preproc.get_tfidf().get_data()),dtype=tf.float32),trainable=False)
-			tfidf_vector = tf.nn.embedding_lookup(tfidf_matrix, self._docs)
-			word_embeddings = tf.concat([word_embeddings, tfidf_vector], axis=2)
-
-		if config.use_sentiment_vectors:
-			sent_matrix = tf.get_variable(
-								name="sentiment_matrix",
-								shape=[preproc.get_sentiment().get_size(), preproc.get_sentiment().get_dim()],
-								initializer=tf.constant_initializer(np.asarray(preproc.get_sentiment().get_data()),dtype=tf.float32),trainable=False)
-			sent_vector = tf.nn.embedding_lookup(sent_matrix, self._docs)
-			word_embeddings = tf.concat([word_embeddings, sent_vector], axis=2)
 
 		word_embeddings = self.create_rnn_layer(word_embeddings,
 											config.word_rnn_sizes,
@@ -196,23 +162,45 @@ class Model:
 
 			combined_embeddings = tf.concat([combined_embeddings, char_embeddings], axis=1)
 
+		# aux embeddings
+		aux_embeddings = None
+		if config.use_tfidf_vectors:
+			tfidf_matrix = tf.get_variable(
+								name="tfidf_matrix",
+								shape=[preproc.get_tfidf().get_size(), preproc.get_tfidf().get_dim()],
+								initializer=tf.constant_initializer(np.asarray(preproc.get_tfidf().get_data()),dtype=tf.float32),trainable=False)
+			tfidf_vector = tf.gather(tfidf_matrix, self._docs)
+			aux_embeddings = tfidf_vector
+
+		if config.use_sentiment_vectors:
+			sent_matrix = tf.get_variable(
+								name="sentiment_matrix",
+								shape=[preproc.get_sentiment().get_size(), preproc.get_sentiment().get_dim()],
+								initializer=tf.constant_initializer(np.asarray(preproc.get_sentiment().get_data()),dtype=tf.float32),trainable=False)
+			sent_vector = tf.gather(sent_matrix, self._docs)
+			aux_embeddings = sent_vector if aux_embeddings != None else tf.concat([aux_embeddings, sent_vector], axis=1)
+
+
+		if aux_embeddings != None:
+			combined_embeddings = tf.concat([combined_embeddings, aux_embeddings], axis=1)
+
 
 		if config.use_final_hidden_layer:
-			final_hidden_layer, _ = self.calculate_logits(combined_embeddings,
+			final_hidden_layer, _ = self.add_hidden_layer(combined_embeddings,
 												config.final_hidden_layer_size,
 												"final_hidden_layer",
 												phase,
 												config.final_hidden_layer_dropout,
 												tf.nn.tanh)
 
-			final_logits, final_logit_weights = self.calculate_logits(final_hidden_layer,
+			final_logits, final_logit_weights = self.add_hidden_layer(final_hidden_layer,
 																label_size,
 																"final_logits",
 																phase,
 																None,
 																tf.nn.tanh)
 		else:
-			final_logits, final_logit_weights = self.calculate_logits(combined_embeddings,
+			final_logits, final_logit_weights = self.add_hidden_layer(combined_embeddings,
 																label_size,
 																"final_logits",
 																phase,
@@ -221,9 +209,14 @@ class Model:
 
 		if phase == Phase.Train or Phase.Validation:
 			if config.use_weighted_loss:
-				losses = self.weighted_loss(final_logits, self._y, preproc.get_max_labels())
+				dataset = preproc.get_training_set() if phase == Phase.Train else preproc.get_validation_set()
+				class_weights = dataset.get_class_ratios(preproc.numberer_label, complement=True)
+				weights = tf.reduce_sum(class_weights * self._y, axis=1)
+				unweighted_losses = tf.nn.softmax_cross_entropy_with_logits_v2(labels=self._y, logits=final_logits)
+				weighted_losses = unweighted_losses * weights
+				losses = tf.reduce_mean(weighted_losses)
 			else:
-				losses = tf.nn.softmax_cross_entropy_with_logits(labels=self._y, logits=final_logits)
+				losses = tf.nn.softmax_cross_entropy_with_logits_v2(labels=self._y, logits=final_logits)
 
 			if config.use_l2_regularization:
 				losses = tf.reduce_mean(losses + config.l2_beta * tf.nn.l2_loss(final_logit_weights))

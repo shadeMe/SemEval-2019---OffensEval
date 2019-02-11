@@ -6,7 +6,7 @@ import random
 import hashedindex as hi
 from hashedindex import textparser
 from nltk.corpus import stopwords
-
+from collections import Counter
 
 class TaskType(IntEnum):
 	Subtask_A = 1,		# binary clasification			- Inoffensive/Offensive
@@ -87,11 +87,13 @@ class Dataset:
 	def __init__(self):
 		self.data = list()	# tuple(doc, list(word tokens), list(list(char tokens)), class), doc, word/character tokens are Numberer indices
 		self.vocab = set()	# set of all (word token) ids in this dataset
+		self.label_counts = Counter()
 
 	def put(self, doc, text, text_chars, label):
 		for id in text:
 			self.vocab.add(id)
 		self.data.append((doc, text, text_chars, label))
+		self.label_counts[label] += 1
 
 	def as_list(self):
 		return self.data
@@ -102,7 +104,11 @@ class Dataset:
 	def get_vocab_size(self):
 		return len(self.vocab)
 
-
+	def get_class_ratios(self, numberer_labels, complement=False):
+		ratios = np.zeros(numberer_labels.max_number(), dtype="float32")
+		for i in range(0, numberer_labels.max_number()):
+			ratios[i] = self.label_counts[i] / self.get_size() if not complement else 1 - self.label_counts[i] / self.get_size()
+		return ratios
 
 
 # loads up pre-trained embeddings from disk
@@ -132,7 +138,7 @@ class PretrainedEmbeddings:
 			lines = self.read_lines(f)
 			for line in lines:
 				if (len(line) < 2): continue
-				elif (maxsize > 0 and counter > maxsize): break
+				elif (maxsize > 0 and counter >= maxsize): break
 
 				splits = line.split(" ")
 				if len(splits) < 3:
@@ -140,8 +146,6 @@ class PretrainedEmbeddings:
 
 				if (self.dim == 0):
 					self.dim = len(splits) - 1
-					# the first index of the embedding list is not used (as Numberer ids start from 1)
-					self.data.append(np.zeros((self.dim), dtype='float32'))
 				elif len(splits) != self.dim + 1:
 					print("invalid splits (found " + str(len(splits)) + ", expected " + str(self.dim + 1) + ")\nline: " + line)
 					continue
@@ -160,7 +164,7 @@ class PretrainedEmbeddings:
 		# convert to NumPy array and discard the intermediate list
 		self.np_arr = np.array(self.data)
 		self.data = None
-		self.length = counter + 1
+		self.length = counter
 
 		return counter
 
@@ -188,9 +192,9 @@ class TfIdfVectorizer:
 
 	def vectorize(self, numberer_doc, doc2token_map):
 		assert self.np_arr == None
-		doc_vecs = [np.zeros(self.dim, dtype="float32")]
+		doc_vecs = []
 
-		for i in range(1, numberer_doc.max_number()):	# index 0 is not used by the Numberer class
+		for i in range(0, numberer_doc.max_number()):
 			token_ids = doc2token_map[i]
 			if len(token_ids) > self.dim:
 				# truncate the rest
@@ -232,9 +236,9 @@ class VaderSentimentVectorizer:
 
 	def vectorize(self, numberer_doc, numberer_word, doc2token_map):
 		assert self.np_arr == None
-		doc_vecs = [np.zeros(self.dim, dtype="float32")]
+		doc_vecs = []
 
-		for i in range(1, numberer_doc.max_number()):
+		for i in range(0, numberer_doc.max_number()):
 			token_ids = doc2token_map[i]
 			if len(token_ids) > self.dim:
 				token_ids = token_ids[0:self.dim - 1]
@@ -432,7 +436,7 @@ class Preprocessor:
 		vocab_val_only = 0			# same as above but for the validation set
 
 		print("Loading embeddings...")
-	#	self.embeddings.load(path_embed, self.numberer_word)
+		self.embeddings.load(path_embed, self.numberer_word)
 		vocab_embeddings = self.numberer_word.max_number()
 
 		print("Loading sentiment lexicon...")
@@ -488,3 +492,6 @@ class Preprocessor:
 
 	def get_max_docs(self):
 		return self.numberer_doc.max_number()
+
+	def get_task_type(self):
+		return self.task_type
