@@ -215,13 +215,15 @@ class Model:
 				class_weights = dataset.get_class_ratios(preproc.numberer_label, complement=True)
 				weights = tf.reduce_sum(class_weights * self._y, axis=1)
 				unweighted_losses = tf.nn.softmax_cross_entropy_with_logits_v2(labels=self._y, logits=final_logits)
-				weighted_losses = unweighted_losses * weights
-				losses = tf.reduce_mean(weighted_losses)
+				losses = unweighted_losses * weights
 			else:
 				losses = tf.nn.softmax_cross_entropy_with_logits_v2(labels=self._y, logits=final_logits)
 
 			if config.use_l2_regularization:
 				losses = tf.reduce_mean(losses + config.l2_beta * tf.nn.l2_loss(final_logit_weights))
+			else:
+				losses = tf.reduce_mean(losses)
+
 
 			self._loss = tf.reduce_sum(losses)
 

@@ -211,7 +211,7 @@ def train_model(preproc, config, train_batches, validation_batches):
 #	where TASK = <A, B, C>
 
 DEFAULT_TRAINING_DATA_PARTITION = 80
-DEFAULT_TASK_TYPE = TaskType.Subtask_C
+DEFAULT_TASK_TYPE = TaskType.Subtask_B
 
 def print_usage():
 	print("Usage: python train.py TASK WORD_EMBEDDINGS TRAIN_DATA TEST_DATA\n\twhere TASK = <A, B, C>\n\n")

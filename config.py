@@ -1,6 +1,6 @@
 class DefaultConfig:
 	def __init__(self):
-		self.remove_hash_tags_and_mentions = True
+		self.remove_hash_tags_and_mentions = False
 		self.remove_stopwords = True
 		self.collapse_negative_classes = True		# when true, all negative labels are collapsed into a single (arbitrary) label
 
@@ -20,8 +20,8 @@ class DefaultConfig:
 		self.final_hidden_layer_size = 100
 		self.final_hidden_layer_dropout = 0.95
 
-		self.use_tfidf_vectors = False
-		self.use_sentiment_vectors = False
+		self.use_tfidf_vectors = True
+		self.use_sentiment_vectors = True
 
 		self.use_char_embeddings = True
 		self.use_char_ngrams = True

@@ -294,7 +294,7 @@ class Preprocessor:
 	def preprocess_tweet(self, text):
 		text = text.lower()
 		if not self.config.remove_hash_tags_and_mentions:
-			stripped = re.sub("(#|url|@user|@)", "", text)
+			stripped = re.sub(r'\burl\b', '', text)
 		else:
 			stripped = re.sub(r'\burl\b', '', text)
 			stripped = re.sub(r'(\b|\s)([@#][\w_-]+)', '', stripped)
